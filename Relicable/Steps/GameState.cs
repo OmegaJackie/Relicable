@@ -483,7 +483,11 @@ public static unsafe class GameState
 
     // The equipped main-hand item id, used to detect a successful UpgradeRelic.
     // Read from the equipped-items container slot 0 (main hand).
-    public static uint EquippedRelicItemId()
+    public static uint EquippedRelicItemId() => EquippedWeaponItemId(0);
+
+    // The item id in an equipped WEAPON slot: 0 = main hand, 1 = off hand (the Paladin's Holy
+    // Shield, the only relic that occupies it). 0 when the slot is empty or unreadable.
+    public static uint EquippedWeaponItemId(ushort equipSlot)
     {
         var im = InventoryManager.Instance();
         if (im == null)
@@ -491,7 +495,7 @@ public static unsafe class GameState
         var c = im->GetInventoryContainer(InventoryType.EquippedItems);
         if (c == null)
             return 0;
-        var slot = c->GetInventorySlot(0); // 0 = main hand
+        var slot = c->GetInventorySlot(equipSlot);
         return slot == null ? 0u : slot->ItemId;
     }
 

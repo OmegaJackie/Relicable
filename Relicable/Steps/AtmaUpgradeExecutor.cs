@@ -98,8 +98,17 @@ public sealed class AtmaUpgradeExecutor : JalzahnUpgradeExecutorBase
                 out var container, out var slot, out var id))
         {
             _menuWeaponName = GameState.ItemName(id);
-            if (container == InventoryType.EquippedItems && GameState.TryUnequipWeapon(slot))
-                _unequipped = true;
+            if (container == InventoryType.EquippedItems)
+            {
+                // Remember the tier before it leaves the hands: stage is read off the EQUIPPED
+                // weapon, so for the length of this trip the live read is None -- which would widen
+                // Auto selection back to stages this character finished long ago. See RelicStageMemo.
+                RelicStageMemo.Note(RelicStage.Relic);
+                if (GameState.TryUnequipWeapon(slot))
+                    _unequipped = true;
+                else
+                    RelicStageMemo.Clear(); // nothing moved; the live read is still authoritative
+            }
         }
     }
 

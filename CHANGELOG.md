@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.5.2.2 — The beastman hunt stops walking past the enemies it needs
+
+### Changed
+
+- **The 24-beastman hunt is one step now, not three.** The journal asks for eight each of
+  three types, and those three spawn groups are mixed together across a single
+  stronghold — so killing them one type at a time meant walking past two thirds of the
+  enemies that still needed killing, then walking the same ground again, and again.
+  Reported as the hunt taking significantly longer than it should.
+
+  It now takes whichever wanted type is **nearest**, so the stronghold is cleared in
+  roughly one pass instead of three.
+
+  The quest caps each type at eight and silently ignores kills past that, so a type is
+  retired once it stops counting — otherwise the last few kills would go to whatever
+  happened to be standing closest. Two independent signals retire a type: eight local
+  kills of it, and (surviving a re-plan, which resets local counts) two kills that
+  produced no rise in the quest's own counter, each judged only after a 5s grace so a
+  credit landing a frame late cannot be mistaken for a cap. If every type ends up retired
+  while the hunt is unfinished, the retirements are thrown away and all three are
+  re-offered — a wrong guess costs a few kills, never a stall.
+
+  Completion is unchanged: the sum of the three quest counters reaching 24.
+
+### Fixed
+
+- **The unfinished relic is equipped the moment Gerolt hands it over** (sequence 9),
+  rather than being left in a bag for the hunt objective to notice. The hunt is a long
+  trip to a stronghold; arriving to find the weapon was never equipped cost the trip.
+
+  Auto-equip also stopped giving up after one look. The weapon takes a server round-trip
+  to land in your bags after a turn-in, so the single check at step start usually missed
+  it and failed with "none found" for a weapon that was about to appear. It now retries
+  for up to 10 seconds.
+
+- **"Give the unfinished \<weapon\> to Gerolt" (sequence 14) takes the weapon off first.**
+  The hand-over UI lists your inventory and armoury but not what is in your hands, so that
+  step could never be satisfied while the relic was equipped. If the turn-in does not
+  happen — aborted, failed, re-planned — the weapon goes straight back on, so a stalled
+  step cannot leave you bare-handed.
+
+- **Unequipping for a turn-in no longer makes the engine forget your progress.** Which
+  stage you are on is read off the equipped weapon, so for the length of any trip that
+  requires the weapon off — the two Jalzahn trades and the sequence-14 hand-over — that
+  read was "no relic at all", which re-opened stages you finished long ago for selection.
+  Those steps now record the tier before unequipping, and planning falls back to it while
+  the hands are empty. Deliberately narrow: a live read always wins, the stand-in is
+  dropped the instant a relic is equipped again, and it expires on its own.
+
 ## 1.5.2.1 — "A Relic Reborn" was missing both Rowena steps
 
 ### Fixed

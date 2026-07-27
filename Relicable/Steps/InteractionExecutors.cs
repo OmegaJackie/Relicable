@@ -14,17 +14,30 @@ namespace Relicable.Steps;
 
 // Plain talk: walk to the NPC, interact, let TextAdvance carry the dialogue,
 // complete when the conversation ends.
+//
+// With StepData.UnequipRelicFirst it also takes the relic weapon off before talking and puts it back
+// afterwards if the conversation did not consume it -- see the field's docs for why the hand-over
+// needs that, and RelicStageMemo for how progress tracking survives the window.
 public sealed class InteractNpcExecutor : ITaskExecutor
 {
     public StepType Handles => StepType.InteractNpc;
 
     private readonly NpcInteractor _npc = new();
 
+    // The equipped weapon slots this step unequipped (0 = main hand, 1 = off hand), so Stop can put
+    // back exactly what it took. Empty when the step did not unequip anything. Reset every Start:
+    // the executor is a reused singleton, so a stale entry would re-equip on an unrelated turn-in.
+    private readonly System.Collections.Generic.List<uint> _unequipped = new();
+
     public void Start(StepData step, ExecutionContext ctx)
     {
         if (ctx.Config.EnableTextAdvance)
             ctx.TextAdvance.Enable();
         _npc.Reset();
+        _unequipped.Clear();
+
+        if (step.UnequipRelicFirst)
+            UnequipRelicWeapons();
     }
 
     public ExecutorStatus Update(StepData step, ExecutionContext ctx)
@@ -34,6 +47,63 @@ public sealed class InteractNpcExecutor : ITaskExecutor
     {
         if (ctx.Config.EnableTextAdvance)
             ctx.TextAdvance.Disable();
+        RestoreRelicWeapons();
+    }
+
+    // Take the relic out of both weapon slots so the turn-in UI can list it, recording the stage
+    // first so planning does not read "no relic at all" while it is off. Both slots are checked
+    // because the Paladin's relic is a pair (Curtana + Holy Shield) and the quest wants both.
+    private void UnequipRelicWeapons()
+    {
+        var stage = GameState.EquippedRelicStage();
+        if (stage == RelicStage.None)
+            return; // nothing relic-ish equipped; the turn-in item is already loose in the bags
+        RelicStageMemo.Note(stage);
+
+        // Off hand first: unequipping the main hand can shuffle an off-hand that depends on it, so
+        // taking the dependent slot off first keeps both moves predictable.
+        for (var slot = 1; slot >= 0; slot--)
+        {
+            var id = GameState.EquippedWeaponItemId((ushort)slot);
+            if (id == 0 || !GameState.IsRelicWeaponId(id))
+                continue;
+            if (GameState.TryUnequipWeapon((ushort)slot))
+            {
+                _unequipped.Add(id);
+                DebugLog.Info($"Turn-in: unequipped '{GameState.ItemName(id)}' so it can be handed over.");
+            }
+            else
+            {
+                DebugLog.Warn($"Turn-in: could not unequip '{GameState.ItemName(id)}' (no free armoury or bag " +
+                              "slot?). The hand-over will not list it -- free a slot and resume.");
+            }
+        }
+    }
+
+    // Put back anything we took off that is STILL held: the hand-over consumes the weapon on
+    // success, so a weapon we can still find means the turn-in did not happen (aborted, failed, or
+    // re-planned) and leaving the character bare-handed would strand the run -- the next step's
+    // stage read would say "no relic" and the kill steps would have nothing equipped to credit.
+    private void RestoreRelicWeapons()
+    {
+        if (_unequipped.Count == 0)
+            return;
+        var restored = false;
+        foreach (var id in _unequipped)
+        {
+            if (GameState.TryFindHeldRelic(i => i == id, includeEquipped: false,
+                    out var container, out var slot, out _))
+            {
+                GameState.TryEquipFromBag(container, slot);
+                restored = true;
+                DebugLog.Info($"Turn-in did not take '{GameState.ItemName(id)}'; re-equipping it.");
+            }
+        }
+        _unequipped.Clear();
+        // Either the weapon is back on (the live read is authoritative again) or it was handed over
+        // (there is nothing to stand in for). Both mean the memo has done its job.
+        if (restored)
+            RelicStageMemo.Clear();
     }
 
     internal static ExecutorStatus ToStatus(InteractionPhase phase) => phase switch

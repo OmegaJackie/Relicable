@@ -111,7 +111,10 @@ public static class BaseRelicState
     // no relic weapon is held anywhere and no base-relic quest is active/unfinished.
     public static RelicStage EffectiveStage()
     {
-        var equipped = GameState.EquippedRelicStage();
+        // The equipped read, or the tier a step noted just before deliberately unequipping the
+        // weapon for a turn-in that needs it off the hands (see Steps.RelicStageMemo) -- so the
+        // reported stage does not drop to "none detected" for the length of such a trip.
+        var equipped = Steps.RelicStageMemo.EffectiveEquippedStage();
         if (equipped != RelicStage.None)
             return equipped;
         return ShouldWorkBaseRelic() || NeedsZenith() ? RelicStage.Relic : RelicStage.None;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Enums;
@@ -40,15 +41,20 @@ public sealed class Targeting
     // distance -- the approach "lock" that stops KillTarget flip-flopping between two mobs whose
     // straight-line nearest swaps as it flies a winding, multi-level route. avoidId: a mob to skip
     // (one the caller judged unreachable), so a stalled approach can pick a different target.
+    //
+    // names: when non-empty, ANY of these names matches (and `name` is ignored). This is what lets a
+    // multi-target grind -- the base relic's "slay eight of each of three beastmen" -- take whichever
+    // of its wanted types is NEAREST instead of clearing one type at a time and walking past the other
+    // two on every lap. Callers narrow the set as types are satisfied.
     public IGameObject? FindNearestEnemy(string? name, uint dataId, bool fateBound,
-        ulong preferredId = 0, ulong avoidId = 0)
+        ulong preferredId = 0, ulong avoidId = 0, IReadOnlyCollection<string>? names = null)
     {
         var me = _provider.PlayerPosition;
 
         var candidates = _provider.Objects
             .Where(o => o.ObjectKind == ObjectKind.BattleNpc)
             .Where(IsAttackable)
-            .Where(o => MatchesIdentity(o, name, dataId))
+            .Where(o => MatchesIdentity(o, name, dataId, names))
             // fateBound: only FATE mobs. Otherwise (open-world relic kill): EXCLUDE FATE mobs so a
             // FATE spawn of the same enemy is not picked and dragged into the FATE.
             .Where(o => fateBound ? IsInFate(o) : MobFateId(o) == 0)
@@ -281,10 +287,12 @@ public sealed class Targeting
     // preferredId: the mob to stay committed to for the approach (returned regardless of distance
     // while still valid); avoidId: a mob to skip (judged unreachable). acquiredId returns the mob we
     // actually locked onto, so the caller can carry the commitment forward. See FindNearestEnemy.
+    // names: an optional set of acceptable enemy names; see FindNearestEnemy.
     public unsafe bool TryAcquireKillTarget(
         bool useNote, string? name, uint dataId, bool fateBound, bool allowFateNote,
         ulong preferredId, ulong avoidId,
-        out Vector3 position, out float distance, out ulong acquiredId, out ushort targetFateId)
+        out Vector3 position, out float distance, out ulong acquiredId, out ushort targetFateId,
+        IReadOnlyCollection<string>? names = null)
     {
         position = default;
         distance = float.MaxValue;
@@ -293,7 +301,7 @@ public sealed class Targeting
 
         var t = useNote
             ? FindNearestMonsterNoteTarget(fateBound, allowFateNote, preferredId, avoidId)
-            : FindNearestEnemy(name, dataId, fateBound, preferredId, avoidId);
+            : FindNearestEnemy(name, dataId, fateBound, preferredId, avoidId, names);
         if (t == null)
             return false;
 
@@ -307,10 +315,21 @@ public sealed class Targeting
         return true;
     }
 
-    private static bool MatchesIdentity(IGameObject o, string? name, uint dataId)
+    // A name SET (when supplied and non-empty) takes precedence over the single name: the caller is
+    // asking for the nearest of several acceptable types, and it shrinks that set as types finish, so
+    // an empty set must never silently fall back to the single name and re-target a satisfied type.
+    private static bool MatchesIdentity(IGameObject o, string? name, uint dataId,
+        IReadOnlyCollection<string>? names = null)
     {
         if (dataId != 0)
             return o.BaseId == dataId;
+        if (names is { Count: > 0 })
+        {
+            foreach (var n in names)
+                if (string.Equals(o.Name.TextValue, n, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
         if (!string.IsNullOrEmpty(name))
             return string.Equals(o.Name.TextValue, name, StringComparison.OrdinalIgnoreCase);
         return false;

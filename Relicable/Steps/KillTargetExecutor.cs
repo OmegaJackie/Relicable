@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Types;
@@ -90,6 +91,50 @@ public sealed class KillTargetExecutor : ITaskExecutor
     private const long StallTimeoutMs = 12000;
     private const long StuckCooldownMs = 20000;
 
+    // ---- Multi-name grind (StepData.TargetNames; the base relic's three-beastman hunt) ----
+    //
+    // The step wants several enemy TYPES at once and takes whichever is nearest, so it must also
+    // stop taking a type once that type is finished -- the quest caps each at eight and silently
+    // ignores further kills, so tunnelling a capped type standing right next to you would grind
+    // forever. Two independent signals retire a type, because neither alone is sufficient:
+    //
+    //   * the local per-name tally reaching the cap. Exact while the step runs, but it is zeroed by
+    //     Start (a re-plan, a death recovery), so on its own it would re-offer a finished type;
+    //   * NoCreditRetireAfter kills of that type that produced no rise in the quest's own counter
+    //     total. Survives a re-plan (it re-derives from the game), and needs no mob->nibble mapping,
+    //     of which only White Mage's is known.
+    //
+    // The second is deliberately given a GRACE window and a repeat requirement: a credit can land a
+    // frame or two after the mob dies, and a previous per-nibble cap detector that judged on the
+    // death frame declared types capped after ~2 kills and ended hunts early (v1.4.126.0). Waiting
+    // for the counter to stay flat across CreditGraceMs, twice, cannot be fooled by that timing.
+    //
+    // If every type ends up retired while the step is still incomplete, the retirements are thrown
+    // away and all types are re-offered -- so a wrong retirement costs a few kills, never a deadlock.
+    private const long CreditGraceMs = 5000;
+    private const int NoCreditRetireAfter = 2;
+
+    private readonly System.Collections.Generic.Dictionary<string, int> _killsByName = new(System.StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Generic.Dictionary<string, int> _noCreditByName = new(System.StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Generic.HashSet<string> _retired = new(System.StringComparer.OrdinalIgnoreCase);
+    // Scratch for the per-tick wanted set. Reused (not reallocated) because it is rebuilt every tick.
+    private readonly System.Collections.Generic.List<string> _wanted = new();
+
+    // The name of the mob currently latched in _engagedId, so its death can be attributed to a type.
+    private string _engagedName = string.Empty;
+
+    // The outstanding "did that kill actually credit?" check: the type killed, the counter total
+    // from BEFORE the kill, and when it was observed. Empty name = nothing pending.
+    private string _pendingName = string.Empty;
+    private int _pendingBaseTotal;
+    private long _pendingAt;
+
+    // The quest counter total as of this tick and as of the previous one. The previous tick's value
+    // is what a credit check compares against: it is guaranteed to pre-date the kill, whereas the
+    // value read on the death tick may already include the credit.
+    private int _qTotal = -1;
+    private int _qTotalLastTick = -1;
+
     public void Start(StepData step, ExecutionContext ctx)
     {
         // RSR may have toggled itself off after the previous fight; force the next
@@ -105,10 +150,22 @@ public sealed class KillTargetExecutor : ITaskExecutor
         // and re-plan, silently rewinding the count to 0. The quest's own counters (below) are
         // what survive that, and they are now the authority.
         _engagedId = 0;
+        _engagedName = string.Empty;
         _localKills = 0;
         // Quest-counter state: only the "last logged total" marker (the completion authority is a
         // stateless absolute read of the game counters, so nothing else needs resetting).
         _qLoggedTotal = -1;
+        // Multi-name state. All of it is per-step and MUST reset: the executor is a singleton, so a
+        // retirement carried over from a previous hunt would refuse a type this one still needs.
+        _killsByName.Clear();
+        _noCreditByName.Clear();
+        _retired.Clear();
+        _wanted.Clear();
+        _pendingName = string.Empty;
+        _pendingBaseTotal = 0;
+        _pendingAt = 0;
+        _qTotal = -1;
+        _qTotalLastTick = -1;
         _landing = false;
         _landingSince = 0;
         _engaging = false;
@@ -142,7 +199,9 @@ public sealed class KillTargetExecutor : ITaskExecutor
         if (!authoritative && _engagedId != 0 && !EngagedAlive())
         {
             _localKills++;
+            NoteKill(_engagedName);
             _engagedId = 0;
+            _engagedName = string.Empty;
             Log($"kill observed ({_localKills} local)");
         }
 
@@ -159,6 +218,11 @@ public sealed class KillTargetExecutor : ITaskExecutor
             // the authority: ignore the local tally so a mis-count cannot end the step early.
             _localKills = 0;
         }
+
+        // Settle any outstanding "did that kill credit?" check against the counter total just read,
+        // then roll the total forward so the NEXT kill compares against a pre-kill value.
+        ResolveCreditWatch();
+        _qTotalLastTick = _qTotal;
 
         // Authoritative kinds (RelicNote monster slot / item count): compare the ABSOLUTE game
         // counter to the required total, exactly as the controller's IsObjectiveComplete does. The
@@ -193,7 +257,8 @@ public sealed class KillTargetExecutor : ITaskExecutor
         var haveTarget = ctx.Targeting.TryAcquireKillTarget(
             useNote, step.TargetName, step.TargetDataId, step.FateBound, allowFateNote,
             _travelLockId, avoidId,
-            out var mobPos, out var mobDist, out var acquiredId, out var targetFateId);
+            out var mobPos, out var mobDist, out var acquiredId, out var targetFateId,
+            WantedNames(step));
 
         // Carry the commitment forward. TryAcquireKillTarget returned the locked mob while it stayed
         // valid, so acquiredId only changes when the old lock died/despawned (or was blacklisted) and
@@ -416,13 +481,19 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 if (!authoritative)
                 {
                     var cur = Plugin.TargetManager.Target;
-                    if (cur != null && cur.GameObjectId != _engagedId
-                        && !string.IsNullOrEmpty(step.TargetName)
-                        && string.Equals(cur.Name.TextValue, step.TargetName,
-                                         System.StringComparison.OrdinalIgnoreCase))
+                    // Matched against the step's FULL authored name list, not the narrowed wanted
+                    // set: a type retired while we were mid-fight is still a mob we are killing, and
+                    // failing to latch it would lose the kill observation entirely.
+                    if (cur != null && cur.GameObjectId != _engagedId && IsStepTargetName(step, cur.Name.TextValue))
+                    {
                         _engagedId = cur.GameObjectId;
+                        _engagedName = cur.Name.TextValue;
+                    }
                     else if (_engagedId == 0)
+                    {
                         _engagedId = relicId; // nothing named matched (FATE/leve kills have no name gate)
+                        _engagedName = string.Empty;
+                    }
                 }
             }
             else
@@ -800,6 +871,8 @@ public sealed class KillTargetExecutor : ITaskExecutor
         var total = BaseRelic.BeastmanCounters.Total(vars);
         if (total < 0)
             return null; // unreadable; fall back
+        // Publish it for the per-type credit watch (see ResolveCreditWatch).
+        _qTotal = total;
 
         // Log every change in the total exactly once -- the running record of the layout for the
         // nine jobs whose mob->nibble assignment is still inference. Deliberately NOT through the
@@ -807,12 +880,110 @@ public sealed class KillTargetExecutor : ITaskExecutor
         if (total != _qLoggedTotal)
         {
             _qLoggedTotal = total;
+            var hunting = step.TargetNames.Count > 0
+                ? string.Join(", ", _wanted.Count > 0 ? _wanted : step.TargetNames)
+                : step.TargetName ?? string.Empty;
             Diagnostics.DebugLog.Info(
                 $"beastmen: quest {qid} (masked {qid & 0xFFFF}) seq {seq}, step target {step.QuestCounterTarget} " +
-                $"for '{step.TargetName}'. {BaseRelic.BeastmanCounters.Dump(vars)}");
+                $"still hunting '{hunting}'. {BaseRelic.BeastmanCounters.Dump(vars)}");
         }
 
         return total >= step.QuestCounterTarget;
+    }
+
+    // ---- Multi-name grind helpers (see the field docs above) ----
+
+    // The enemy names this step will accept RIGHT NOW: the authored list minus the types already
+    // finished. Null for an ordinary single-target step, which leaves the acquire exactly as it was.
+    private System.Collections.Generic.IReadOnlyCollection<string>? WantedNames(StepData step)
+    {
+        if (step.TargetNames.Count == 0)
+            return null;
+
+        _wanted.Clear();
+        foreach (var n in step.TargetNames)
+        {
+            if (_retired.Contains(n))
+                continue;
+            if (_killsByName.GetValueOrDefault(n) >= BaseRelic.BeastmanCounters.PerMobTarget)
+                continue;
+            _wanted.Add(n);
+        }
+
+        if (_wanted.Count == 0)
+        {
+            // Every type looks finished, yet the step has not completed -- so at least one
+            // retirement was wrong (a re-plan zeroed the tallies mid-hunt, or a credit was missed).
+            // Re-offer everything rather than standing in the middle of the stronghold with nothing
+            // eligible: a wrong retirement then costs a few kills instead of hanging the run.
+            Diagnostics.DebugLog.Warn("Kill step: every enemy type looked finished but the step is not " +
+                                      "complete; re-offering all of them.");
+            _retired.Clear();
+            _killsByName.Clear();
+            _noCreditByName.Clear();
+            _wanted.AddRange(step.TargetNames);
+        }
+        return _wanted;
+    }
+
+    // Is this the name of something this step kills at all (any authored type, retired or not)?
+    private static bool IsStepTargetName(StepData step, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return false;
+        if (step.TargetNames.Count > 0)
+        {
+            foreach (var n in step.TargetNames)
+                if (string.Equals(n, name, System.StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+        return !string.IsNullOrEmpty(step.TargetName)
+               && string.Equals(name, step.TargetName, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Record a kill against its type and open a credit watch on it. The watch's baseline is the
+    // PREVIOUS tick's counter total, which is guaranteed to pre-date this kill.
+    private void NoteKill(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return;
+        _killsByName[name] = _killsByName.GetValueOrDefault(name) + 1;
+        if (_qTotalLastTick < 0)
+            return; // no readable counter (not the beastmen hunt) -> nothing to watch
+        _pendingName = name;
+        _pendingBaseTotal = _qTotalLastTick;
+        _pendingAt = System.Environment.TickCount64;
+    }
+
+    // Settle the outstanding credit watch: the counter rising proves the type still counts; the
+    // counter staying flat for the whole grace window is one strike against it, and
+    // NoCreditRetireAfter strikes retire it.
+    private void ResolveCreditWatch()
+    {
+        if (_pendingName.Length == 0 || _qTotal < 0)
+            return;
+
+        if (_qTotal > _pendingBaseTotal)
+        {
+            _noCreditByName.Remove(_pendingName); // it credited; any earlier strike was noise
+            _pendingName = string.Empty;
+            return;
+        }
+
+        if (System.Environment.TickCount64 - _pendingAt < CreditGraceMs)
+            return; // still inside the window where a late credit can land
+
+        var name = _pendingName;
+        _pendingName = string.Empty;
+        var strikes = _noCreditByName.GetValueOrDefault(name) + 1;
+        _noCreditByName[name] = strikes;
+        if (strikes < NoCreditRetireAfter)
+            return;
+
+        _retired.Add(name);
+        Diagnostics.DebugLog.Info($"beastmen: '{name}' no longer credits after {strikes} kills " +
+                                  $"(its {BaseRelic.BeastmanCounters.PerMobTarget} are done); hunting the other types only.");
     }
 
     // True while the last-engaged base-relic mob is still alive. A despawned (gone) or

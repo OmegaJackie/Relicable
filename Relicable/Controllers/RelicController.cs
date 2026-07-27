@@ -348,7 +348,11 @@ public sealed class RelicController
             // engine there even for a player already holding a Nexus (or later) weapon.
             // That is the "Nexus seen as Novus" symptom. Manual mode intentionally skips
             // this so a passed stage can still be revisited to farm more.
-            var completedStage = GameState.EquippedRelicStage();
+            // The equipped read, or -- while a step has deliberately taken the weapon OFF for a
+            // turn-in it could not otherwise make (the Jalzahn trades, the sequence-14 hand-over) --
+            // the tier it noted before doing so. Without that stand-in the live read is None for the
+            // length of the trip, which means "no progress at all" here and re-opens finished stages.
+            var completedStage = Steps.RelicStageMemo.EffectiveEquippedStage();
             // A finished base relic sitting UNEQUIPPED (a Zenith parked in the armoury/bags, e.g. a
             // repeat relic, or one the player unequipped) reads as None from the equipped-slot scan.
             // Left unbounded, the pool would then mis-route a 12/12-atma player into ANOTHER job's
