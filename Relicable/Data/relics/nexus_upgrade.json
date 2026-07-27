@@ -1,0 +1,18 @@
+{
+  // Nexus stage, step 2 (after the Light farm fills the gauge): perform the Novus -> Nexus upgrade at
+  // Jalzahn (Hyrstmill, North Shroud), reached from Fallgourd Float. The single NexusUpgrade step
+  // resolves the aetheryte/NPC/position at runtime (NexusData) and drives Jalzahn's "Relic Weapon:
+  // Novus Enhancement" menu, so this is a bare step. Completion is read from the equipped weapon: the
+  // NexusUpgraded kind holds once the weapon reaches the Nexus tier, so it is job-proof and survives a
+  // re-select mid-upgrade (unlike LightGauge, which reads complete the instant the gauge fills). The
+  // farm objective (nexus-light-farm) sorts before this one while both are incomplete, so the Light is
+  // always full before the upgrade runs.
+  "stage": "Nexus",
+  "book": 0,
+  "id": "nexus-upgrade",
+  "displayName": "Relic Weapon Novus Enhancement (Jalzahn) -- click to fly there",
+  "steps": [
+    { "type": "NexusUpgrade" }
+  ],
+  "completion": { "kind": "NexusUpgraded" }
+}

@@ -1,0 +1,10 @@
+{
+  "stage": "Novus",
+  "book": 0,
+  "id": "novus-meld-route",
+  "displayName": "Meld Novus materia (cheapest route, in order)",
+  "steps": [
+    { "type": "MeldNovusRoute" }
+  ],
+  "completion": { "kind": "AllStepsDone" }
+}

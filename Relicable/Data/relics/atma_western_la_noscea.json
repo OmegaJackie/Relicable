@@ -1,0 +1,15 @@
+{
+  // Atma stage: farm level-50 FATEs in Western La Noscea (Zenith weapon equipped) until the zone's
+  // atma drops. One objective per zone (12 total); each completes when its own atma is held,
+  // so together they read complete exactly when the Jalzahn enhancement is possible.
+  // Item id / zone verified against Item.csv; aetheryte 14 = Aleport (Aetheryte.csv).
+  "stage": "Atma",
+  "book": 0,
+  "id": "atma-western-la-noscea",
+  "displayName": "Atma of the Crab (FATEs in Western La Noscea)",
+  "steps": [
+    { "type": "AetheryteTeleport", "aetheryteId": 14 },
+    { "type": "ParticipateFate", "fateId": 0, "count": 1 }
+  ],
+  "completion": { "kind": "ItemCount", "itemId": 7862, "threshold": 1 }
+}

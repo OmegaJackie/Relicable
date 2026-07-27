@@ -1,0 +1,12 @@
+{
+  "Author": "Relicable contributors",
+  "Name": "Relicable",
+  "InternalName": "Relicable",
+  "Punchline": "Automate the ARR Zodiac relic line",
+  "Description": "Data-driven automation engine for the ARR Zodiac relic line. Orchestrates vnavmesh, Rotation Solver Reborn, Lifestream, TextAdvance, and AutoDuty.",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/OmegaJackie/Relicable",
+  "Tags": [ "relic", "zodiac", "automation" ],
+  "LoadRequiredState": 0,
+  "CanUnloadAsync": false
+}

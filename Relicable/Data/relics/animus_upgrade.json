@@ -1,0 +1,19 @@
+{
+  // Animus stage, final step (after all 9 Trials of the Braves books are complete): perform the
+  // Atma -> Animus enhancement at Jalzahn (Fallgourd Float, North Shroud) -- the "Relic Weapon Atma
+  // Enhancement" turn-in of the UNEQUIPPED Atma weapon (with the completed books) for the il110
+  // Animus weapon. The single AnimusUpgrade step resolves the aetheryte/NPC/position at runtime
+  // (NexusData, the same Jalzahn trip as the Atma and Nexus upgrades); the executor unequips the
+  // Atma weapon so it lists in the turn-in menu, drives the menu, then re-equips the resulting Animus
+  // weapon. Completion is read from the equipped weapon reaching the Animus tier (AnimusUpgraded) --
+  // the books are consumed by the trade, so an item count would lie. The controller only selects
+  // this once the run has driven all 9 books to a complete note on the equipped Atma weapon.
+  "stage": "Animus",
+  "book": 0,
+  "id": "animus-upgrade",
+  "displayName": "Relic Weapon Atma Enhancement (Jalzahn) -- click to fly there",
+  "steps": [
+    { "type": "AnimusUpgrade" }
+  ],
+  "completion": { "kind": "AnimusUpgraded" }
+}

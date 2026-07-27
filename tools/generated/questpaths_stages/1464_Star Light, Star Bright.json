@@ -1,0 +1,45 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Relicable gen_quest_tables (XIVAPI v2 bookends only)",
+  // GENERATED SKELETON for Star Light, Star Bright (Novus stage, masked id 1464).
+  // Accept @ Hubairtin, turn-in @ Jalzahn.
+  // The Novus grind between them is already plugin-driven (not a quest path).
+  // NOT loader-ready: QuestPathLoader currently only consumes per-job Relic-stage
+  // paths. This is a reference/authoring artifact -- see stage_gap_checklist.md.
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1009151,
+          "Position": {
+            "X": 105.363,
+            "Y": 30.9041,
+            "Z": -385.135
+          },
+          "TerritoryId": 141,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    // TODO: the Novus grind parks the quest at a final sequence (commonly 255)
+    // until the stage's objective is met -- the plugin already drives that part.
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1008948,
+          "Position": {
+            "X": 405.12,
+            "Y": -4.49814,
+            "Z": -89.1504
+          },
+          "TerritoryId": 154,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

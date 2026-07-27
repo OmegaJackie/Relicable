@@ -1,0 +1,263 @@
+# Relicable - tagged release build
+#
+# Trigger: pushing a tag that starts with "v" (v1.4.174.0, v1.5.0.0-alpha, ...).
+#
+# What this has to work around, and why each step exists:
+#
+#   * net10.0-windows is a Windows-only target framework. Dalamud plugins cannot
+#     be built on ubuntu-latest at all, so this job is pinned to windows-latest.
+#   * ECommons is a hard ProjectReference (..\ECommons\ECommons\ECommons.csproj)
+#     but it is NOT a submodule and is NOT committed - it is gitignored and
+#     expected to be cloned next to the plugin project. actions/checkout will
+#     therefore not bring it in; we clone it explicitly.
+#   * The Dalamud reference assemblies (Dalamud.dll, ImGui.NET.dll, Lumina*.dll,
+#     FFXIVClientStructs.dll) are NOT on a GitHub runner. Locally the SDK finds
+#     them at %AppData%\XIVLauncher\addon\Hooks\dev. In CI we download the
+#     Dalamud dev distribution and point DALAMUD_HOME at it.
+#
+# NOTE ON THE REPO LAYOUT ASSUMED HERE: the git repository root is the
+# ZodiacRedone folder, i.e. the checkout contains Relicable/, docs/, tools/,
+# BUILDING.md, and this .github/ folder. ECommons is cloned to ./ECommons so
+# that the ProjectReference ..\ECommons\ECommons\ECommons.csproj resolves.
+# If you instead publish only the Relicable/ folder as the repository, every
+# path below needs to drop the "Relicable/" prefix and ECommons must be cloned
+# one level above the checkout.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  # Lets you re-run the packaging by hand (produces artifacts, but no release,
+  # because there is no tag to attach one to).
+  workflow_dispatch:
+
+permissions:
+  # softprops/action-gh-release needs write access to create the release and
+  # upload the asset.
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest   # REQUIRED: net10.0-windows cannot build on ubuntu
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. The plugin source
+      # ------------------------------------------------------------------
+      - name: Check out Relicable
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 2. ECommons
+      #
+      # Relicable has a ProjectReference to ..\ECommons\ECommons\ECommons.csproj
+      # (AddonMaster wrappers, chat helpers, etc). It is gitignored rather than
+      # vendored or submoduled, so it must be cloned here or the build fails at
+      # restore with "project file does not exist".
+      #
+      # This pins to the DEFAULT BRANCH, which means an upstream commit can
+      # break a tagged build of Relicable after the fact. Pinning to a commit
+      # SHA is SAFER and is what you want once the plugin is public:
+      #
+      #     git clone https://github.com/NightmareXIV/ECommons ECommons
+      #     git -C ECommons checkout <full-40-char-sha>
+      #
+      # (--depth 1 below is incompatible with checking out an arbitrary SHA;
+      # drop it, or use `git fetch --depth 1 origin <sha>`, when you pin.)
+      # ------------------------------------------------------------------
+      - name: Clone ECommons (gitignored dependency, not a submodule)
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/NightmareXIV/ECommons ECommons
+          Write-Host "ECommons at commit: $(git -C ECommons rev-parse HEAD)"
+
+      # ------------------------------------------------------------------
+      # 3. .NET 10 SDK
+      #
+      # Dalamud.NET.Sdk/15.0.0 targets net10.0-windows (API 14+ moved to .NET 10).
+      # windows-latest may or may not already carry a .NET 10 SDK; install it
+      # explicitly so the build does not depend on the runner image contents.
+      # ------------------------------------------------------------------
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # ------------------------------------------------------------------
+      # 4. Dalamud reference assemblies
+      #
+      # Not present on the runner. Download the dev distribution and set
+      # DALAMUD_HOME to the folder that directly contains Dalamud.dll -
+      # that is exactly the variable Dalamud.NET.Sdk reads (it otherwise
+      # defaults to %AppData%\XIVLauncher\addon\Hooks\dev).
+      #
+      # "latest.zip" is the STABLE Dalamud branch. If the plugin ever has to be
+      # built against a Dalamud API level that is still on staging, switch to
+      #   https://goatcorp.github.io/dalamud-distrib/stg/latest.zip
+      # The API level of whatever is downloaded must match Dalamud.NET.Sdk's
+      # (currently API 15); a mismatch shows up as CS1061/CS0117 on single
+      # members rather than as a clean error.
+      # ------------------------------------------------------------------
+      - name: Download and extract Dalamud
+        shell: pwsh
+        run: |
+          $dalamudDir = Join-Path $env:RUNNER_TEMP 'dalamud'
+          New-Item -ItemType Directory -Force -Path $dalamudDir | Out-Null
+
+          $zip = Join-Path $env:RUNNER_TEMP 'dalamud-latest.zip'
+          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dalamudDir -Force
+
+          # Sanity check: if Dalamud.dll is not here the build will fail later
+          # with confusing "type or namespace not found" errors, so fail now.
+          if (-not (Test-Path (Join-Path $dalamudDir 'Dalamud.dll'))) {
+            Write-Error "Dalamud.dll not found in $dalamudDir - the distrib layout may have changed."
+            exit 1
+          }
+
+          # Export DALAMUD_HOME for every subsequent step.
+          "DALAMUD_HOME=$dalamudDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ------------------------------------------------------------------
+      # 5. Build
+      # ------------------------------------------------------------------
+      - name: Restore
+        run: dotnet restore Relicable/Relicable.csproj
+
+      - name: Build (Release)
+        run: dotnet build Relicable/Relicable.csproj -c Release --no-restore
+
+      # ------------------------------------------------------------------
+      # 6. Package
+      #
+      # Dalamud.NET.Sdk already produces a correctly-shaped plugin zip during a
+      # Release build. On a local Release build of this project it landed at
+      #   Relicable\bin\Release\Relicable\latest.zip
+      # and contained: Relicable.dll, Relicable.json, Relicable.deps.json,
+      # ECommons.dll/.pdb/.xml, Data\relics\*.json, Data\questpaths\*.json -
+      # i.e. exactly the payload we want to ship. Preferring that zip avoids
+      # re-deriving the layout by hand.
+      #
+      # PATHS ARE GLOBBED ON PURPOSE. The output directory is not verified for a
+      # CI build (the SDK can emit bin\Release\, bin\x64\Release\, or a
+      # TFM subfolder depending on version/config), so we search rather than
+      # hardcode. EXPECT TO ADJUST THIS STEP AFTER THE FIRST RUN - check the
+      # step log, which prints what it actually found.
+      # ------------------------------------------------------------------
+      - name: Package Relicable.zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $staging = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          $outZip = Join-Path $staging 'Relicable.zip'
+
+          Write-Host '--- build output tree (for path verification) ---'
+          Get-ChildItem -Path 'Relicable/bin' -Recurse -File |
+            Select-Object -ExpandProperty FullName | Write-Host
+
+          # Preferred: the zip the Dalamud SDK packed for us.
+          $sdkZip = Get-ChildItem -Path 'Relicable/bin' -Recurse -Filter 'latest.zip' -File |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+
+          if ($sdkZip) {
+            Write-Host "Using SDK-produced plugin zip: $($sdkZip.FullName)"
+            Copy-Item -Path $sdkZip.FullName -Destination $outZip -Force
+          }
+          else {
+            # Fallback: assemble the zip by hand from wherever Relicable.dll landed.
+            Write-Host 'No SDK latest.zip found - packing manually.'
+
+            $dll = Get-ChildItem -Path 'Relicable/bin' -Recurse -Filter 'Relicable.dll' -File |
+                   Where-Object { $_.FullName -match '\\Release\\' } |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+            if (-not $dll) { throw 'Relicable.dll not found under Relicable/bin - adjust the glob in this step.' }
+
+            $outDir = $dll.Directory.FullName
+            Write-Host "Plugin output directory: $outDir"
+
+            $pack = Join-Path $env:RUNNER_TEMP 'pack'
+            Remove-Item -Recurse -Force $pack -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $pack | Out-Null
+
+            # Relicable.dll + the manifest + ECommons.dll (a real runtime dependency).
+            Copy-Item (Join-Path $outDir 'Relicable.dll')  $pack -Force
+            Copy-Item (Join-Path $outDir 'Relicable.json') $pack -Force
+            foreach ($optional in @('Relicable.deps.json','ECommons.dll')) {
+              $p = Join-Path $outDir $optional
+              if (Test-Path $p) { Copy-Item $p $pack -Force }
+            }
+
+            # Data/*.json - the objective + questpath tables, copied to output by
+            # the csproj's None/CopyToOutputDirectory items. Preserve the tree.
+            $dataSrc = Join-Path $outDir 'Data'
+            if (Test-Path $dataSrc) {
+              Copy-Item $dataSrc (Join-Path $pack 'Data') -Recurse -Force
+            } else {
+              throw "Data folder not found next to Relicable.dll ($dataSrc) - adjust this step."
+            }
+
+            Compress-Archive -Path (Join-Path $pack '*') -DestinationPath $outZip -Force
+          }
+
+          Write-Host '--- Relicable.zip contents ---'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [System.IO.Compression.ZipFile]::OpenRead($outZip)
+          $names = $z.Entries | ForEach-Object { $_.FullName }
+          $names | Write-Host
+          $z.Dispose()
+
+          # Guards: a zip without the manifest is not installable by Dalamud,
+          # and a zip without Data/ produces a plugin that loads but has no
+          # objectives.
+          if ($names -notcontains 'Relicable.json') { throw 'Relicable.json missing from the zip.' }
+          if ($names -notcontains 'Relicable.dll')  { throw 'Relicable.dll missing from the zip.' }
+          if (-not ($names | Where-Object { $_ -match '^Data[\\/]' })) { throw 'Data/*.json missing from the zip.' }
+
+      # Always keep the zip as a build artifact, even for workflow_dispatch runs
+      # where no release is created.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relicable
+          path: artifacts/Relicable.zip
+          if-no-files-found: error
+
+      # ------------------------------------------------------------------
+      # 7. Release
+      #
+      # Only for tag pushes. The release is marked as a prerelease because
+      # Relicable is an EARLY ALPHA (repo.json also sets IsTestingExclusive).
+      # The asset name must stay "Relicable.zip" - repo.json's download links
+      # point at /releases/latest/download/Relicable.zip.
+      # ------------------------------------------------------------------
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Relicable ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/Relicable.zip
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            **Relicable ${{ github.ref_name }} - Early Alpha**
+
+            Relicable is invite-only while it is in early alpha: an access code
+            is required to run it. Requests go through the developer, not
+            through GitHub issues.
+
+            Install via the third-party repository manifest:
+            `https://raw.githubusercontent.com/OmegaJackie/Relicable/main/repo.json`
+            (Dalamud: /xlsettings > Experimental > Custom Plugin Repositories).
+            Testing builds must be enabled - this plugin is testing-exclusive.
+
+            Requires the companion plugins listed in BUILDING.md
+            (vnavmesh, BossMod Reborn or Rotation Solver Reborn, Lifestream,
+            TextAdvance, AutoDuty).

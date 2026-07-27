@@ -1,0 +1,10 @@
+{
+  "stage": "Novus",
+  "book": 0,
+  "id": "novus-alexandrite-farm",
+  "displayName": "Farm Alexandrite via Mysterious Maps (to your target)",
+  "steps": [
+    { "type": "RunTreasureMaps", "count": 75 }
+  ],
+  "completion": { "kind": "AlexandriteCount" }
+}

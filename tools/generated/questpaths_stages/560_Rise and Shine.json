@@ -1,0 +1,45 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Relicable gen_quest_tables (XIVAPI v2 bookends only)",
+  // GENERATED SKELETON for Rise and Shine (Zeta stage, masked id 560).
+  // Accept @ Jalzahn, turn-in @ Remon.
+  // The Zeta grind between them is already plugin-driven (not a quest path).
+  // NOT loader-ready: QuestPathLoader currently only consumes per-job Relic-stage
+  // paths. This is a reference/authoring artifact -- see stage_gap_checklist.md.
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1008948,
+          "Position": {
+            "X": 405.12,
+            "Y": -4.49814,
+            "Z": -89.1504
+          },
+          "TerritoryId": 154,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    // TODO: the Zeta grind parks the quest at a final sequence (commonly 255)
+    // until the stage's objective is met -- the plugin already drives that part.
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1011791,
+          "Position": {
+            "X": 641.685,
+            "Y": 9.44449,
+            "Z": 511.198
+          },
+          "TerritoryId": 138,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

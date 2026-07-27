@@ -1,0 +1,15 @@
+{
+  // Atma stage: farm level-50 FATEs in Western Thanalan (Zenith weapon equipped) until the zone's
+  // atma drops. One objective per zone (12 total); each completes when its own atma is held,
+  // so together they read complete exactly when the Jalzahn enhancement is possible.
+  // Item id / zone verified against Item.csv; aetheryte 17 = Horizon (Aetheryte.csv).
+  "stage": "Atma",
+  "book": 0,
+  "id": "atma-western-thanalan",
+  "displayName": "Atma of the Twins (FATEs in Western Thanalan)",
+  "steps": [
+    { "type": "AetheryteTeleport", "aetheryteId": 17 },
+    { "type": "ParticipateFate", "fateId": 0, "count": 1 }
+  ],
+  "completion": { "kind": "ItemCount", "itemId": 7857, "threshold": 1 }
+}

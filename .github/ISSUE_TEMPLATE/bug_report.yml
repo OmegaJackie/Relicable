@@ -1,0 +1,160 @@
+name: Bug report
+description: Something in the relic automation stalled, went to the wrong place, or did the wrong thing.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Relicable is an **Early Alpha** and the single most
+        useful thing you can attach is the log.
+
+        > **Do NOT paste your Early Alpha access code anywhere in this issue** -
+        > not in the description, not in a screenshot, not in the log excerpt.
+        > Access codes are personal. Redact them before uploading anything.
+        > If you have already pasted one somewhere public, tell the developer
+        > directly so it can be rotated.
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this is not already reported.
+          required: true
+        - label: I am running the latest released version of Relicable.
+          required: false
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Relicable version
+      description: Shown in /xlplugins next to the plugin, and in the title bar of /relic.
+      placeholder: "1.4.174.0"
+    validations:
+      required: true
+
+  - type: input
+    id: dalamud-version
+    attributes:
+      label: Dalamud version / API level
+      description: "/xlsettings > About, or the version line at the top of /xllog. Include the branch (release or staging) if you know it."
+      placeholder: "Dalamud 15.x.x.x (API 15), release branch"
+    validations:
+      required: true
+
+  - type: input
+    id: job-and-relic
+    attributes:
+      label: Job and relic weapon
+      description: Which job was active and which relic weapon the run is for.
+      placeholder: "Dragoon - Gae Bolg Zenith"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: combat-backend
+    attributes:
+      label: Combat backend
+      description: Which combat plugin was Relicable driving when this happened?
+      options:
+        - BossMod Reborn
+        - Rotation Solver Reborn (RSR)
+        - None / not applicable
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: stage
+    attributes:
+      label: Stage
+      description: The relic stage the run was on.
+      placeholder: "Animus (book 4)"
+    validations:
+      required: true
+
+  - type: input
+    id: objective
+    attributes:
+      label: Exact objective / step
+      description: >-
+        Copy the objective line shown in the /relic main window as exactly as you
+        can, including the step text if one was displayed.
+      placeholder: "animus_book1_amaljaa_thaumaturge - step 3: Kill Amalj'aa Lancer (0/8)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What the plugin actually did, and what you expected instead.
+      placeholder: |
+        Expected: travel to the FATE and engage.
+        Actual: mounted, flew to the ring, then stood still and never attacked.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that gets back to the failure, starting from a known state.
+      placeholder: |
+        1. Fresh /relic start, Auto mode, DRG, Animus stage.
+        2. Let it buy book 4 at G'Jusana.
+        3. It takes the first leve objective and ...
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (/xllog)
+      description: >-
+        Attach the log file, or paste the relevant portion here. Drag-and-drop
+        the file into this box to upload it. Remember to redact your access code.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: log-attached
+    attributes:
+      label: Log confirmation
+      description: >-
+        Turn on "Enable debug log" in /relic config > Diagnostics, reproduce the
+        problem, then attach /xllog output. Reports without the debug log usually
+        cannot be diagnosed.
+      options:
+        - label: >-
+            I have attached (or pasted) my /xllog output, captured with
+            "Enable debug log" turned ON in /relic config, and I have redacted
+            my Early Alpha access code from it.
+          required: true
+
+  - type: textarea
+    id: companions
+    attributes:
+      label: Companion plugin versions
+      description: >-
+        Versions of vnavmesh, BossMod Reborn / Rotation Solver Reborn, Lifestream,
+        TextAdvance and AutoDuty, plus anything else that automates your character
+        (YesAlready, Bossmod presets, etc). The Dependencies tab in /relic config
+        lists live status.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, video, in-game conditions (level sync, party state, weather) that seem relevant.
+    validations:
+      required: false

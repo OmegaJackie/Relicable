@@ -1,0 +1,22 @@
+{
+  // Zeta stage: charge all 12 Mahatma. Progress (Mahatma awakened, and the current
+  // Mahatma's fill) is read live from the equipped Zodiac Braves weapon, so completion
+  // is the real MahatmaGauge (all 12 awakened). One re-arming objective:
+  //   1. AttachMahatma -- teleport to Remon (Swiftperch) and attach the next Mahatma
+  //      (50 Poetics); a no-op while one is already attached. Remon's location is
+  //      resolved at runtime (Data/ZetaData.cs), so the step needs no parameters.
+  //   2. EnterDuty -- farm the configured unsynced duty (default Aurum Vale) until the
+  //      current Mahatma awakens; the loop then re-attaches the next.
+  // The duty / loops / unsynced come from the config window ("Zeta (Mahatma farm)").
+  // The one-time final awakening at Jalzahn is left to the player (it needs the relic
+  // unequipped); the main-window tracker shows when you are ready for it.
+  "stage": "Zeta",
+  "book": 0,
+  "id": "zeta-mahatma-farm",
+  "displayName": "Charge 12 Mahatma (attach at Remon, farm unsynced via AutoDuty)",
+  "steps": [
+    { "type": "AttachMahatma" },
+    { "type": "EnterDuty" }
+  ],
+  "completion": { "kind": "MahatmaGauge" }
+}

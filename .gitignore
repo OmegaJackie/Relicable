@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# Relicable
+# ---------------------------------------------------------------------------
+
+# ***************************************************************************
+# EARLY ALPHA SIGNING KEYS -- NEVER COMMIT
+#
+# keys/relicable-alpha.key is the ECDSA private key that signs every access
+# code. Publishing it would let anyone mint their own codes, and the only fix
+# would be rotating the keypair and reissuing every code ever handed out.
+# Check `git status` before your first push.
+# ***************************************************************************
+/keys/
+*.pem
+*.key
+*.pfx
+*.snk
+
+# ---------------------------------------------------------------------------
+# ECommons
+#
+# Relicable has a ProjectReference to ..\ECommons\ECommons\ECommons.csproj, but
+# ECommons is a separate upstream repository cloned next to this one rather than
+# vendored or submoduled. See BUILDING.md step 1. Ignored so the clone does not
+# show up as thousands of untracked files.
+# ---------------------------------------------------------------------------
+/ECommons/
+
+# ---------------------------------------------------------------------------
+# .NET build output
+# ---------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+*.dll
+*.pdb
+*.exe
+*.cache
+*.user
+*.suo
+*.userprefs
+*_i.c
+*_p.c
+*.ilk
+*.meta
+*.obj
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.log
+*.vspscc
+*.vssscc
+
+# packages.lock.json IS committed on purpose -- it pins the restore graph so a
+# build years from now resolves the same package versions.
+!packages.lock.json
+
+# ---------------------------------------------------------------------------
+# IDEs
+# ---------------------------------------------------------------------------
+.vs/
+.idea/
+*.DotSettings.user
+*.sln.docstates
+
+.vscode/*
+!.vscode/extensions.json
+
+# ---------------------------------------------------------------------------
+# Python (tools/)
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ---------------------------------------------------------------------------
+# Local agent / editor state
+# ---------------------------------------------------------------------------
+.claude/
+
+# ---------------------------------------------------------------------------
+# Vendored third-party package
+#
+# RelicBurstRotations/packages/RotationSolverReborn.Basic.*.nupkg is extracted
+# from an installed copy of Rotation Solver Reborn -- it is not published on
+# nuget.org. Republishing someone else's compiled assembly is a licensing
+# question, so it stays local. RelicBurstRotations/nuget.config explains how a
+# contributor obtains their own copy.
+# ---------------------------------------------------------------------------
+RelicBurstRotations/packages/
+
+# ---------------------------------------------------------------------------
+# Internal working notes, not for publication
+#
+# CHANGELOG-internal.md is the archived development changelog lifted out of
+# Relicable.csproj. Kept locally for reference; the public history is CHANGELOG.md.
+# ---------------------------------------------------------------------------
+CHANGELOG-internal.md
+
+# ---------------------------------------------------------------------------
+# Release staging
+# ---------------------------------------------------------------------------
+/dist/
+*.zip
+
+# ---------------------------------------------------------------------------
+# OS cruft
+# ---------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store

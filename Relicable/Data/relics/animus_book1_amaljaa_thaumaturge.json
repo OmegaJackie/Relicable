@@ -1,0 +1,12 @@
+{
+  "stage": "Animus",
+  "book": 1,
+  "id": "animus-1-amaljaa-thaumaturge",
+  "displayName": "Amalj'aa Thaumaturge, Southern Thanalan",
+  "steps": [
+    { "type": "AetheryteTeleport", "aetheryteId": 17 },
+    { "type": "MoveToFlag", "stopDistance": 3.0 },
+    { "type": "KillTarget", "targetName": "Amalj'aa Thaumaturge", "count": 3 }
+  ],
+  "completion": { "kind": "MonsterSlot", "slot": 0, "threshold": 3, "book": 1 }
+}

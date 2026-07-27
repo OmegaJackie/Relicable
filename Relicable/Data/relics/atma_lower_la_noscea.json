@@ -1,0 +1,15 @@
+{
+  // Atma stage: farm level-50 FATEs in Lower La Noscea (Zenith weapon equipped) until the zone's
+  // atma drops. One objective per zone (12 total); each completes when its own atma is held,
+  // so together they read complete exactly when the Jalzahn enhancement is possible.
+  // Item id / zone verified against Item.csv; aetheryte 10 = Moraby Drydocks (Aetheryte.csv).
+  "stage": "Atma",
+  "book": 0,
+  "id": "atma-lower-la-noscea",
+  "displayName": "Atma of the Fish (FATEs in Lower La Noscea)",
+  "steps": [
+    { "type": "AetheryteTeleport", "aetheryteId": 10 },
+    { "type": "ParticipateFate", "fateId": 0, "count": 1 }
+  ],
+  "completion": { "kind": "ItemCount", "itemId": 7859, "threshold": 1 }
+}

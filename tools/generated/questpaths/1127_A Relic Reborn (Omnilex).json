@@ -1,0 +1,49 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Relicable gen_quest_tables (XIVAPI v2 derivable bookends only)",
+  // GENERATED SKELETON for A Relic Reborn (Omnilex) (masked id 1127).
+  // Only the bookends are derivable from the game sheets: accept + turn-in at
+  // Gerolt (id 1003075). The trial gauntlet in between
+  // (Chimera, class weapon, Amdapor Keep, 24 beastmen, Hydra, 3 primals, oils) is
+  // NOT in Quest.TodoParams; it is driven by BaseRelicData.GlobalParts, calibrated
+  // from /relic questwork. Fill sequences 1..N below from an in-game capture, then
+  // move this file into Relicable/Data/questpaths/ to activate it (and bump the
+  // csproj version). See quest_gap_checklist.md.
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    // TODO: sequences 1..N -- the trial gauntlet. Capture each live sequence with
+    // /relic questwork (giver/target DataId, Position, TerritoryId, InteractionType,
+    // and for Combat/Duty the enemy name + count / duty territory).
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

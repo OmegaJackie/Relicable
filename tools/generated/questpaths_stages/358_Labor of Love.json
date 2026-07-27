@@ -1,0 +1,45 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Relicable gen_quest_tables (XIVAPI v2 bookends only)",
+  // GENERATED SKELETON for Labor of Love (Braves stage, masked id 358).
+  // Accept @ Guiding Star, turn-in @ Guiding Star.
+  // The Braves grind between them is already plugin-driven (not a quest path).
+  // NOT loader-ready: QuestPathLoader currently only consumes per-job Relic-stage
+  // paths. This is a reference/authoring artifact -- see stage_gap_checklist.md.
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1006971,
+          "Position": {
+            "X": 24.3083,
+            "Y": 29.0217,
+            "Z": -726.856
+          },
+          "TerritoryId": 156,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    // TODO: the Braves grind parks the quest at a final sequence (commonly 255)
+    // until the stage's objective is met -- the plugin already drives that part.
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1006971,
+          "Position": {
+            "X": 24.3083,
+            "Y": 29.0217,
+            "Z": -726.856
+          },
+          "TerritoryId": 156,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  // Nexus stage: accumulate 2000 Light. Light is read live from the equipped Novus
+  // relic, so completion is the real LightGauge (full at 2000) and the farm auto-stops
+  // the moment it fills. The farm duty, loop cap, and unsynced flag come from the
+  // config window ("Nexus (Light farm)" section), defaulting to the Bowl of Embers
+  // (Extreme) run unsynced via AutoDuty -- so this is a single bare EnterDuty step.
+  "stage": "Nexus",
+  "book": 0,
+  "id": "nexus-light-farm",
+  "displayName": "Farm Light to 2000 (Bowl of Embers (Extreme), unsynced via AutoDuty)",
+  "steps": [
+    { "type": "EnterDuty" }
+  ],
+  "completion": { "kind": "LightGauge" }
+}

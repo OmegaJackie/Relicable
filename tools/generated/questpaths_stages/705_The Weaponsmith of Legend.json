@@ -1,0 +1,45 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Relicable gen_quest_tables (XIVAPI v2 bookends only)",
+  // GENERATED SKELETON for The Weaponsmith of Legend (Relic stage, masked id 705).
+  // Accept @ Nedrick Ironheart, turn-in @ Gerolt.
+  // The Relic grind between them is already plugin-driven (not a quest path).
+  // NOT loader-ready: QuestPathLoader currently only consumes per-job Relic-stage
+  // paths. This is a reference/authoring artifact -- see stage_gap_checklist.md.
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1005021,
+          "Position": {
+            "X": -472.485,
+            "Y": 23.0288,
+            "Z": -354.971
+          },
+          "TerritoryId": 140,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    // TODO: the Relic grind parks the quest at a final sequence (commonly 255)
+    // until the stage's objective is met -- the plugin already drives that part.
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

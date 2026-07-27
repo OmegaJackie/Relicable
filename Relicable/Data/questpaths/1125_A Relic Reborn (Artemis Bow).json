@@ -1,0 +1,94 @@
+{
+  "$schema": "https://qstxiv.github.io/schema/quest-v1.json",
+  "Author": "Anonymous",
+  "QuestSequence": [
+    {
+      "Sequence": 0,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "AcceptQuest",
+          "Fly": true
+        }
+      ]
+    },
+    {
+      // Part 1: recover the broken Artemis Bow from Natalan (Coerthas Central Highlands).
+      // The WalkTo alone used to be the WHOLE sequence, which is why the run flew here,
+      // stood still, and never advanced: the quest's only action is OPENING the coffer.
+      // The WalkTo is kept because it is proven to arrive; the InteractObject step then
+      // finds the coffer (by name, with the DataId as a stronger match) anywhere within
+      // 100y of wherever we land and walks onto it. Sequence 2 reports back to Gerolt.
+      "Sequence": 1,
+      "Steps": [
+        {
+          "Position": {
+            "X": 684.511,
+            "Y": 312.208,
+            "Z": -0.588841
+          },
+          "TerritoryId": 155,
+          "InteractionType": "WalkTo",
+          "Fly": true
+        },
+        {
+          // SEAMS (derived offline from the game sheets, NOT observed in-game -- verify on
+          // a live run): DataId 2002497 comes from the EObj -> Quest link for masked quest
+          // 1125, and "Treasure Coffer" from its EObjName row. Either needle alone finds the
+          // object, so a wrong id still works via the name and vice versa.
+          // The Position is the coffer's Level-sheet row, corroborated independently: it
+          // converts (MapCoords' formula) to map (35.4, 22.2), matching the authored
+          // BaseRelicData Natalan stop for Bard to two decimals.
+          "DataId": 2002497,
+          "ObjectName": "Treasure Coffer",
+          "Position": {
+            "X": 697.691,
+            "Y": 287.493,
+            "Z": 38.4924
+          },
+          "TerritoryId": 155,
+          "InteractionType": "InteractObject",
+          "Fly": true
+        }
+      ]
+    },
+    {
+      "Sequence": 2,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "Interact",
+          "Fly": true
+        }
+      ]
+    },
+    {
+      "Sequence": 255,
+      "Steps": [
+        {
+          "DataId": 1003075,
+          "Position": {
+            "X": 440.726,
+            "Y": -0.937455,
+            "Z": -62.1923
+          },
+          "TerritoryId": 154,
+          "InteractionType": "CompleteQuest",
+          "Fly": true
+        }
+      ]
+    }
+  ]
+}

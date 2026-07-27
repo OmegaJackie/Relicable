@@ -1,0 +1,59 @@
+﻿<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <!--
+    Relicable is a Dalamud plugin, so it is built against the Dalamud reference
+    assemblies (Dalamud, ImGui.NET, Lumina, Lumina.Excel, FFXIVClientStructs).
+    The Dalamud.NET.Sdk above resolves all of those automatically and sets the
+    correct target framework, unsafe flag, language version, and packaging.
+
+    Requirements to build:
+      1. .NET 10 SDK installed (Dalamud v15 / API 15 targets net10.0-windows;
+         API 14+ moved to .NET 10. Verified against dalamud.dev/versions, 2026-06).
+      2. Windows: net10.0-windows is Windows-only.
+      3. Dalamud installed locally. The SDK locates its assemblies via the
+         DALAMUD_HOME environment variable, defaulting to
+         %AppData%\XIVLauncher\addon\Hooks\dev. Run FFXIV once through
+         XIVLauncher with Dalamud enabled, or set DALAMUD_HOME, so that folder
+         exists.
+      4. NuGet restore access (to fetch Dalamud.NET.Sdk/15.0.0 on first build).
+
+    Match the SDK version to your installed Dalamud API level. If your Dalamud is
+    older/newer, change "15.0.0" to the matching Dalamud.NET.Sdk version, or some
+    FFXIVClientStructs / Lumina members may not line up.
+  -->
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Bumped by 0.0.0.1 each change so the dev plugin shows the update.
+         Release history lives in CHANGELOG.md, not in this file. -->
+    <Version>1.5.0.0</Version>
+    <AssemblyVersion>1.5.0.0</AssemblyVersion>
+    <FileVersion>1.5.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ECommons provides the AddonMaster wrappers (SelectString / GuildLeve /
+         JournalDetail) used by the leve accept + initiate flow, ported from Battlevest.
+         It must sit beside this project as ..\ECommons, i.e. directly under the
+         repository root. ECommons has no submodules, so a plain clone is enough:
+           cd <repository root>          (the folder that contains Relicable\)
+           git clone https://github.com/NightmareXIV/ECommons
+         (Prefer a pinned commit for reproducible builds: git submodule add <url>.)
+         ECommons targets net10.0-windows and resolves Dalamud from
+         %appdata%\xivlauncher\Addon\Hooks\dev, matching this project. -->
+    <ProjectReference Include="..\ECommons\ECommons\ECommons.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Objective data files shipped beside the plugin DLL. -->
+    <None Include="Data\relics\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- qstxiv quest-path files (sequence-driven base-relic objectives). -->
+    <None Include="Data\questpaths\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

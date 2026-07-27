@@ -1,0 +1,29 @@
+# Normalize line endings so a Windows-only project does not produce whole-file
+# diffs when someone contributes from WSL or a different editor.
+* text=auto eol=lf
+
+*.cs        text diff=csharp
+*.csproj    text
+*.props     text
+*.targets   text
+*.json      text
+*.md        text
+*.yml       text
+*.yaml      text
+*.py        text
+*.sln       text eol=crlf
+
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.zip       binary
+*.dll       binary
+*.pdb       binary
+
+# Generated data. Marking it keeps GitHub's language statistics meaningful and
+# collapses these files by default in pull request diffs -- they are derived from
+# XIVAPI by tools/, not hand-written, so reviewing them line by line is noise.
+tools/generated/**            linguist-generated=true
+Relicable/Data/relics/*.json      linguist-generated=true
+Relicable/Data/questpaths/*.json  linguist-generated=true
+Relicable/Data/*.Generated.cs     linguist-generated=true

@@ -1,0 +1,19 @@
+{
+  // Atma stage, final step (after the 12-zone FATE farm): perform the Zenith -> Atma
+  // enhancement at Jalzahn (Hyrstmill, North Shroud), reached from Fallgourd Float -- the
+  // "Relic Weapon Zenith Enhancement" trade of the UNEQUIPPED Zenith weapon + the 12 atmas for
+  // the il100 Atma weapon. The single AtmaUpgrade step resolves the aetheryte/NPC/position at
+  // runtime (NexusData, the same Jalzahn trip as the Nexus upgrade); the executor unequips the
+  // Zenith so it lists in the turn-in menu, drives the menu, then re-equips the resulting Atma
+  // weapon. Completion is read from the equipped weapon reaching the Atma tier (AtmaUpgraded) --
+  // the atmas are consumed by the trade, so an item count would lie. The 12 farm objectives sort
+  // before this one (KindPriority) while any atma is missing.
+  "stage": "Atma",
+  "book": 0,
+  "id": "atma-upgrade",
+  "displayName": "Relic Weapon Zenith Enhancement (Jalzahn) -- click to fly there",
+  "steps": [
+    { "type": "AtmaUpgrade" }
+  ],
+  "completion": { "kind": "AtmaUpgraded" }
+}
