@@ -50,6 +50,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly External.AutoDutyIpc _autoDuty;
     private readonly Braves.RelicNoteBookHook _bookHook;
     private readonly External.IfritBurstRotationSwap _burstRotationSwap;
+    private readonly External.WrathComboCombatBackend _wrathCombo;
     private readonly Licensing.AlphaGate _alphaGate;
     private readonly AlphaGateWindow _alphaGateWindow;
     // Latches the Early Alpha gate closing mid-session (a code expiring while the game is
@@ -97,7 +98,9 @@ public sealed class Plugin : IDalamudPlugin
         // Configuration.Backend. BossModRebornCombatBackend lets BossMod Reborn drive the
         // rotation so RSR is not required; CombatRouter dispatches to the chosen one (or none).
         var bossModRebornCombat = new BossModRebornCombatBackend(PluginInterface, _config);
-        var combat = new CombatRouter(_config, rotation, bossModRebornCombat);
+        // Wrath Combo: lease-based, so it is held as a field and released in Dispose.
+        _wrathCombo = new WrathComboCombatBackend(PluginInterface, _config);
+        var combat = new CombatRouter(_config, rotation, bossModRebornCombat, _wrathCombo);
         var autoRetainer = new AutoRetainerIpc(PluginInterface);
         // Croizat's Bundle of Tweaks (CBT) -- optional Atma FATE-farm backend (its Fate Tool Kit).
         var bundleOfTweaks = new BundleOfTweaksIpc(PluginInterface);
@@ -173,7 +176,8 @@ public sealed class Plugin : IDalamudPlugin
         };
 
         var dependencies = new DependencyRegistry(
-            PluginInterface, _config, navmesh, rotation, lifestream, textAdvance, autoDuty, bossModReborn, autoRetainer);
+            PluginInterface, _config, navmesh, rotation, lifestream, textAdvance, autoDuty, bossModReborn,
+            _wrathCombo, autoRetainer);
 
         _controller = new RelicController(ctx, objectives, executors, dependencies);
 
@@ -378,7 +382,8 @@ public sealed class Plugin : IDalamudPlugin
                     var msg = "Relicable: cannot start, missing required plugins: " + string.Join(", ", missing);
                     if (MissingIsCombatBackend(missing))
                         msg += ". Your combat backend requires that plugin -- switch it in /relic config > Settings " +
-                               "(Combat backend) to a plugin you have installed (BossMod Reborn or RSR), or install the one shown.";
+                               "(Combat backend) to a plugin you have installed (BossMod Reborn, Rotation Solver Reborn " +
+                               "or Wrath Combo), or install the one shown.";
                     Log.Warning(msg);
                 }
                 break;
@@ -438,14 +443,14 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    // True when a missing required plugin is a combat backend (RSR or BossMod Reborn), so the
+    // True when a missing required plugin is a combat backend (RSR, BossMod Reborn or Wrath Combo), so the
     // start-blocked message can point the user at the Combat backend setting instead of just
     // naming the plugin -- the usual cause of "it still wants RSR" is the backend being set to
     // RSR (the required backend gates on Configuration.Backend).
     private static bool MissingIsCombatBackend(IReadOnlyList<string> missing)
     {
         foreach (var m in missing)
-            if (m.Contains("Rotation Solver") || m.Contains("BossMod"))
+            if (m.Contains("Rotation Solver") || m.Contains("BossMod") || m.Contains("Wrath"))
                 return true;
         return false;
     }
@@ -475,6 +480,10 @@ public sealed class Plugin : IDalamudPlugin
         // breadcrumb is what gets persisted.
         _burstRotationSwap.Restore();
         _controller.Stop();
+        // Hand Wrath Combo's Auto-Rotation settings back to the user. Without this our
+        // lease keeps the settings it took over locked, with Relicable still named as
+        // their owner in Wrath's own window.
+        _wrathCombo.Dispose();
         // Drop our YesAlready stop-request so our name does not linger in the shared set after we are
         // gone (the leve-return handler adds it while running). Must run before ECommonsMain.Dispose,
         // which tears down the EzSharedData plumbing this reads.

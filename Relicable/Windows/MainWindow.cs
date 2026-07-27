@@ -215,9 +215,9 @@ public sealed class MainWindow : Window
                 // The usual "it still wants RSR" cause: the combat backend is set to a plugin
                 // you do not have. Point at the setting rather than just naming the plugin.
                 foreach (var m in missing)
-                    if (m.Contains("Rotation Solver") || m.Contains("BossMod"))
+                    if (m.Contains("Rotation Solver") || m.Contains("BossMod") || m.Contains("Wrath"))
                     {
-                        _startError += "\nCombat backend needs it: switch it in Config (Combat backend) to BossMod Reborn or RSR to match what you have installed.";
+                        _startError += "\nCombat backend needs it: switch it in Config (Combat backend) to BossMod Reborn, Rotation Solver Reborn or Wrath Combo to match what you have installed.";
                         break;
                     }
             }

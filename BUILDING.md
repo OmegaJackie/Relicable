@@ -108,6 +108,7 @@ Repositories*, **Save**, then install from `/xlplugins`.
 | vnavmesh | `https://puni.sh/api/repository/veyn` |
 | Rotation Solver Reborn | `https://raw.githubusercontent.com/FFXIV-CombatReborn/CombatRebornRepo/main/pluginmaster.json` |
 | BossMod Reborn | *(same CombatReborn repo as above)* |
+| Wrath Combo | `https://love.puni.sh/ment.json` |
 | Lifestream | `https://love.puni.sh/ment.json` |
 | TextAdvance | `https://love.puni.sh/ment.json` — enable it globally |
 | AutoDuty | `https://love.puni.sh/ment.json` |

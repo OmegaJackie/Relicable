@@ -1,9 +1,9 @@
 namespace Relicable.External;
 
-// Abstraction over the combat driver so the executors are backend-agnostic. Both
-// Rotation Solver Reborn (RotationSolverIpc) and BossMod Reborn
-// (BossModRebornCombatBackend) implement this; CombatRouter picks the active one from
-// Configuration.Backend at call time.
+// Abstraction over the combat driver so the executors are backend-agnostic. Rotation
+// Solver Reborn (RotationSolverIpc), BossMod Reborn (BossModRebornCombatBackend) and
+// Wrath Combo (WrathComboCombatBackend) all implement this; CombatRouter picks the
+// active one from Configuration.Backend at call time.
 //
 // The surface is exactly what the kill / FATE / leve / treasure-map executors call
 // through ctx.Rotation. Relicable itself sets the hard target (KillTarget marks and
@@ -44,6 +44,14 @@ public interface ICombatBackend
     // Force the next Enable/Disable to re-send even if the cached state is unchanged
     // (e.g. the plugin reset its own mode/preset, or we just left a duty).
     void ResyncNextDispatch();
+
+    // Hand back any control LEASED from the backend plugin, as opposed to merely
+    // stopping combat. Only Wrath Combo leases: while its lease is held it locks every
+    // setting Relicable wrote and names Relicable as their owner in its own window, so
+    // Disable() alone would leave a switched-away user unable to edit their own Wrath
+    // configuration. Default no-op, because RSR and BossMod Reborn have nothing to hand
+    // back. Must be idempotent and safe when nothing was ever leased.
+    void ReleaseControl() { }
 }
 
 // Backend for Configuration.CombatBackend.None: does nothing. Selecting "None" means
@@ -69,14 +77,18 @@ public sealed class CombatRouter : ICombatBackend
     private readonly Configuration _config;
     private readonly RotationSolverIpc _rsr;
     private readonly BossModRebornCombatBackend _bossModReborn;
+    private readonly WrathComboCombatBackend _wrathCombo;
     private readonly NullCombatBackend _none = new();
     private Configuration.CombatBackend _last;
 
-    public CombatRouter(Configuration config, RotationSolverIpc rsr, BossModRebornCombatBackend bossModReborn)
+    public CombatRouter(
+        Configuration config, RotationSolverIpc rsr, BossModRebornCombatBackend bossModReborn,
+        WrathComboCombatBackend wrathCombo)
     {
         _config = config;
         _rsr = rsr;
         _bossModReborn = bossModReborn;
+        _wrathCombo = wrathCombo;
         _last = config.Backend;
     }
 
@@ -84,6 +96,7 @@ public sealed class CombatRouter : ICombatBackend
     {
         Configuration.CombatBackend.BossModReborn => _bossModReborn,
         Configuration.CombatBackend.RotationSolverReborn => _rsr,
+        Configuration.CombatBackend.WrathCombo => _wrathCombo,
         _ => _none,
     };
 
@@ -95,7 +108,12 @@ public sealed class CombatRouter : ICombatBackend
         if (current != _last)
         {
             var old = For(_last);
+            // Stop it first, then hand back anything it had leased -- a lease-based
+            // backend (Wrath Combo) otherwise keeps the user's settings locked and
+            // attributed to Relicable for the rest of the session even though it is no
+            // longer driving anything.
             old.Disable();
+            old.ReleaseControl();
             old.ResyncNextDispatch();
             _last = current;
         }
@@ -109,4 +127,5 @@ public sealed class CombatRouter : ICombatBackend
     public void ConfigureForFate() => Active().ConfigureForFate();
     public bool OwnsFateTargeting => Active().OwnsFateTargeting;
     public void ResyncNextDispatch() => Active().ResyncNextDispatch();
+    public void ReleaseControl() => Active().ReleaseControl();
 }

@@ -104,7 +104,7 @@ public sealed class ConfigWindow : Window
 
         ImGui.TextDisabled("Combat");
         var backend = (int)_config.Backend;
-        if (ImGui.Combo("Combat backend", ref backend, "None\0Rotation Solver Reborn\0BossMod Reborn\0"))
+        if (ImGui.Combo("Combat backend", ref backend, "None\0Rotation Solver Reborn\0BossMod Reborn\0Wrath Combo\0"))
         {
             _config.Backend = (Configuration.CombatBackend)backend;
             _dirty = true;
@@ -164,6 +164,37 @@ public sealed class ConfigWindow : Window
             Ui.Tooltip("Automatically pick up the nearest FATE enemy. Applied only inside the FATE and " +
                 "never written to your saved Rotation Solver settings. Requires a recent Rotation Solver; " +
                 "older builds ignore it.");
+        }
+        else if (_config.Backend == Configuration.CombatBackend.WrathCombo)
+        {
+            Ui.Note("Wrath Combo is lease-based: Relicable registers for control while it runs and hands it back " +
+                "when it unloads. Wrath's own window marks the settings Relicable is driving.");
+
+            Checkbox("Let Relicable configure Wrath's Auto-Rotation", _config.WrathManageAutoRotationConfig,
+                v => _config.WrathManageAutoRotationConfig = v);
+            Ui.Tooltip("Recommended on. Relicable clears Wrath's in-combat gating so the rotation will open on a " +
+                "NEUTRAL relic-note enemy, and sets FATE targeting while in a FATE.\n\n" +
+                "Turn it off to have Relicable only switch Auto-Rotation on and off, leaving the rest of your Wrath " +
+                "configuration exactly as you set it.");
+
+            if (!_config.WrathManageAutoRotationConfig)
+                Ui.Wrapped(Yellow,
+                    "With this off, Wrath will not open on a neutral book enemy unless you have already turned off " +
+                    "'In combat only' and 'Only attack in combat' in Wrath yourself — the relic grind will stall.");
+
+            var wrathTargeting = (int)_config.WrathFateTargeting;
+            if (ImGui.Combo("FATE targeting", ref wrathTargeting,
+                    "Manual (Relicable picks)\0Highest max HP\0Lowest max HP\0Highest current HP\0Lowest current HP\0Tank's target\0Nearest\0Furthest\0"))
+            {
+                _config.WrathFateTargeting = (Configuration.WrathDpsTargeting)wrathTargeting;
+                _dirty = true;
+            }
+            Ui.Tooltip("How Wrath picks targets inside a FATE.\n\n" +
+                "'Highest max HP' favours the FATE boss; 'Nearest' is steadier for FATEs with many adds. " +
+                "'Manual' hands targeting back to Relicable, which then hard-targets each enemy itself.");
+
+            Ui.Note("The relic-note grind always pins Wrath to Manual targeting regardless of this setting — those " +
+                "enemies are neutral and have to be pulled off a hard target.");
         }
 
         Checkbox("Target Ifrit's Infernal Nails first in the Bowl of Embers (Extreme)",

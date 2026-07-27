@@ -91,8 +91,14 @@ buttons for each.
 
 - **vnavmesh** — all movement and pathfinding.
 - **A combat backend**, one of:
-  - **BossMod Reborn** (the default — no other combat plugin needed), or
-  - **Rotation Solver Reborn**.
+  - **BossMod Reborn** (the default — no other combat plugin needed),
+  - **Rotation Solver Reborn**, or
+  - **[Wrath Combo](https://github.com/PunishXIV/WrathCombo)**.
+
+  Wrath Combo is lease-based: Relicable registers for control while it runs and hands it back when
+  it unloads, and Wrath's own window marks which settings Relicable is driving. By default Relicable
+  clears Wrath's in-combat gating so the rotation will open on a *neutral* relic-note enemy — you can
+  turn that off in `/relic config` to keep your Wrath setup untouched.
 
 **Strongly recommended:**
 

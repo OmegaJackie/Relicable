@@ -32,6 +32,7 @@ public sealed class DependencyRegistry
     private readonly TextAdvanceIpc _textAdvance;
     private readonly AutoDutyIpc _autoDuty;
     private readonly BossModRebornIpc _bossModReborn;
+    private readonly WrathComboCombatBackend _wrathCombo;
     private readonly AutoRetainerIpc _autoRetainer;
 
     // Dalamud custom-repository JSON links (paste into /xlsettings > Experimental).
@@ -49,6 +50,7 @@ public sealed class DependencyRegistry
         TextAdvanceIpc textAdvance,
         AutoDutyIpc autoDuty,
         BossModRebornIpc bossModReborn,
+        WrathComboCombatBackend wrathCombo,
         AutoRetainerIpc autoRetainer)
     {
         _pi = pi;
@@ -59,6 +61,7 @@ public sealed class DependencyRegistry
         _textAdvance = textAdvance;
         _autoDuty = autoDuty;
         _bossModReborn = bossModReborn;
+        _wrathCombo = wrathCombo;
         _autoRetainer = autoRetainer;
     }
 
@@ -124,6 +127,20 @@ public sealed class DependencyRegistry
                 _bossModReborn.Available,
                 "https://github.com/FFXIV-CombatReborn/BossmodReborn", CombatRebornRepo,
                 "BossModReborn"),
+
+            // Required only when it is the selected combat backend. Wrath is lease-based:
+            // Relicable registers for control while it runs and hands it back on unload.
+            //
+            // GateLive deliberately also requires that a lease is obtainable. Wrath's own
+            // IPCReady only reports that its caches are built, and is independent of the
+            // IPC toggle that actually decides whether RegisterForLease succeeds -- so
+            // reporting on IPCReady alone shows a green row while nothing can drive
+            // combat, and the user gets a clean start followed by silent inaction.
+            Build("Wrath Combo",
+                _config.Backend == Configuration.CombatBackend.WrathCombo,
+                _wrathCombo.Available && !_wrathCombo.LeaseRefused,
+                "https://github.com/PunishXIV/WrathCombo", PunishRepo,
+                "WrathCombo"),
 
             // Optional: enumerates retainers and can be suppressed while Relicable
             // drives the bell. Required only for the Novus auto-withdraw convenience;

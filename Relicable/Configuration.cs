@@ -19,7 +19,42 @@ public sealed class Configuration : IPluginConfiguration
         // Persisted as the int 2 (formerly named BossMod, when the integration targeted a
         // different BossMod fork); now drives BossMod Reborn, so saved configs carry over.
         BossModReborn,
+        // Wrath Combo (PunishXIV). Lease-based: Relicable registers for control, drives
+        // Wrath's Auto-Rotation, and hands control back when it unloads.
+        WrathCombo,
     }
+
+    // Mirror of Wrath Combo's DPSRotationMode BY VALUE (sent as the int). Used for how
+    // Wrath picks targets during FATE / open-world auto combat. Manual means "only ever
+    // act on the player's hard target", which is what the neutral relic-note grind needs
+    // and is therefore forced there regardless of this setting.
+    public enum WrathDpsTargeting
+    {
+        Manual = 0,
+        HighestMaxHp = 1,
+        LowestMaxHp = 2,
+        HighestCurrentHp = 3,
+        LowestCurrentHp = 4,
+        TankTarget = 5,
+        Nearest = 6,
+        Furthest = 7,
+    }
+
+    // ---- Wrath Combo options (only used when Backend == WrathCombo) ----
+
+    // Let Relicable configure Wrath's Auto-Rotation settings while it runs (in-combat
+    // gating, DPS targeting mode, FATE priority/bypass). ON by default, because without
+    // it Wrath will not open on a neutral relic-note mob and the grind stalls.
+    //
+    // Turn it OFF to have Relicable only switch Auto-Rotation on and off and otherwise
+    // leave your Wrath configuration exactly as you tuned it. Wrath shows which settings
+    // are IPC-controlled in its own window, and they are released when Relicable unloads.
+    public bool WrathManageAutoRotationConfig { get; set; } = true;
+
+    // How Wrath chooses targets during FATE combat. HighestMaxHp favours the FATE boss;
+    // Nearest is the steadier pick for add-heavy FATEs. Setting this to Manual makes
+    // Relicable keep hard-targeting each mob itself instead of handing targeting over.
+    public WrathDpsTargeting WrathFateTargeting { get; set; } = WrathDpsTargeting.HighestMaxHp;
 
     // Mirror of RSR's TargetHostileType by NAME (the value sent to RSR's "HostileType" setting
     // is this enum member's name), for the RSR-FATE hostile-type selector below. Only the
