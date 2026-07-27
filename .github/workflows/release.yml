@@ -89,10 +89,28 @@ jobs:
       # ------------------------------------------------------------------
       # 4. Dalamud reference assemblies
       #
-      # Not present on the runner. Download the dev distribution and set
-      # DALAMUD_HOME to the folder that directly contains Dalamud.dll -
-      # that is exactly the variable Dalamud.NET.Sdk reads (it otherwise
-      # defaults to %AppData%\XIVLauncher\addon\Hooks\dev).
+      # Not present on the runner, and TWO projects need them, by two different
+      # mechanisms - which is why this extracts to the default XIVLauncher path
+      # rather than somewhere neutral:
+      #
+      #   * Relicable builds on Dalamud.NET.Sdk, which reads DALAMUD_HOME.
+      #   * ECommons is a plain Microsoft.NET.Sdk project with hand-written
+      #     <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath> references, and on
+      #     WINDOWS it hardcodes
+      #         <DalamudLibPath>$(appdata)\xivlauncher\Addon\Hooks\dev\</DalamudLibPath>
+      #     It only consults DALAMUD_HOME inside a Linux-conditioned PropertyGroup,
+      #     so on a Windows runner it ignores it completely.
+      #
+      # Extracting only to RUNNER_TEMP therefore built nothing: ECommons resolved
+      # every Dalamud/ImGui/Lumina/FFXIVClientStructs/Newtonsoft reference to a
+      # path that does not exist on a runner, and the build died with ~1900
+      # CS0246s inside ECommons (Window, WindowSystem, AtkUnitBase, ImGuiCol,
+      # JsonProperty, IDalamudTextureWrap ...) before Relicable was even reached.
+      # The errors name ECommons files, not ours - that is the tell.
+      #
+      # So: extract ONCE into %AppData%\XIVLauncher\addon\Hooks\dev - the path a
+      # developer machine genuinely has, and the default both projects agree on -
+      # and point DALAMUD_HOME at that same folder. One copy, both resolvers.
       #
       # "latest.zip" is the STABLE Dalamud branch. If the plugin ever has to be
       # built against a Dalamud API level that is still on staging, switch to
@@ -104,7 +122,10 @@ jobs:
       - name: Download and extract Dalamud
         shell: pwsh
         run: |
-          $dalamudDir = Join-Path $env:RUNNER_TEMP 'dalamud'
+          $ErrorActionPreference = 'Stop'
+
+          # The path ECommons hardcodes on Windows, and Dalamud.NET.Sdk's own default.
+          $dalamudDir = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
           New-Item -ItemType Directory -Force -Path $dalamudDir | Out-Null
 
           $zip = Join-Path $env:RUNNER_TEMP 'dalamud-latest.zip'
@@ -118,8 +139,21 @@ jobs:
             exit 1
           }
 
-          # Export DALAMUD_HOME for every subsequent step.
+          # ECommons references these by name; a distrib reshuffle that drops one would
+          # otherwise resurface as a wall of CS0246 deep inside ECommons. Name the missing
+          # file here instead.
+          foreach ($required in @(
+            'Dalamud.dll','Dalamud.Common.dll','Dalamud.Bindings.ImGui.dll',
+            'Lumina.dll','Lumina.Excel.dll','FFXIVClientStructs.dll','Newtonsoft.Json.dll')) {
+            if (-not (Test-Path (Join-Path $dalamudDir $required))) {
+              Write-Error "$required not found in $dalamudDir - ECommons references it by HintPath."
+              exit 1
+            }
+          }
+
+          # Export DALAMUD_HOME too, for Dalamud.NET.Sdk (Relicable's own project).
           "DALAMUD_HOME=$dalamudDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Dalamud reference assemblies at: $dalamudDir"
 
       # ------------------------------------------------------------------
       # 5. Build
