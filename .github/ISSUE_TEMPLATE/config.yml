@@ -4,7 +4,7 @@ blank_issues_enabled: false
 
 contact_links:
   - name: Early Alpha access request
-    url: https://github.com/OmegaJackie/Relicable#early-alpha
+    url: https://github.com/OmegaJackie/RelicAssist#early-alpha
     about: >-
       Relicable is invite-only during the early alpha and needs an access code to
       run. Access requests go through the developer directly - do NOT open a
@@ -13,7 +13,7 @@ contact_links:
       screenshots.
 
   - name: Setup and build help
-    url: https://github.com/OmegaJackie/Relicable/blob/main/BUILDING.md
+    url: https://github.com/OmegaJackie/RelicAssist/blob/main/BUILDING.md
     about: >-
       Installing the companion plugins (vnavmesh, BossMod Reborn / Rotation
       Solver Reborn, Lifestream, TextAdvance, AutoDuty), building from source,

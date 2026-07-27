@@ -8,7 +8,7 @@
     "Punchline": "Automate the ARR Zodiac relic line (Early Alpha, access code required)",
     "Description": "EARLY ALPHA - an access code from the developer is required to run this plugin; it will not start without one.\n\nData-driven automation engine for the ARR Zodiac relic line (A Relic Reborn through Zodiac Zeta). It plans and drives the stage objectives - Atma FATE farming, Animus book leves and dungeons, Novus materia/scroll planning, Nexus light farming, and the Jalzahn/Gerolt upgrade turn-ins - by orchestrating other plugins over IPC rather than replacing them.\n\nRequires these companion plugins, installed and working: vnavmesh (movement), BossMod Reborn or Rotation Solver Reborn (combat), Lifestream (aetheryte travel), TextAdvance (dialogue), and AutoDuty (dungeons). The Dependencies tab in /relic config shows live status for each.\n\nUSE AT YOUR OWN RISK: automating movement and combat is botting under the FINAL FANTASY XIV User Agreement, and Square Enix suspends and terminates accounts for it. The risk is highest for the open-world stages (Atma, Animus, Nexus, Zeta), which run in shared content where other players can observe and report you. Neither this plugin nor its authors can reduce that risk or protect you from it.\n\nThis is alpha software that takes control of your character for long unattended sessions. It is incomplete, it has rough edges, and stages will occasionally stall and need manual help. Do not run it unattended if that is not acceptable to you. Bug reports should include /xllog output with 'Enable debug log' turned on in /relic config.",
     "ApplicableVersion": "any",
-    "RepoUrl": "https://github.com/OmegaJackie/Relicable",
+    "RepoUrl": "https://github.com/OmegaJackie/RelicAssist",
     "Tags": [
       "relic",
       "zodiac",
@@ -30,10 +30,10 @@
     "IsHide": false,
     "IsTestingExclusive": true,
     "AcceptsFeedback": false,
-    "FeedbackMessage": "Please report issues on GitHub: https://github.com/OmegaJackie/Relicable/issues - never paste your Early Alpha access code into a report.",
-    "IconUrl": "https://raw.githubusercontent.com/OmegaJackie/Relicable/main/icon.png",
-    "DownloadLinkInstall": "https://github.com/OmegaJackie/Relicable/releases/latest/download/Relicable.zip",
-    "DownloadLinkUpdate": "https://github.com/OmegaJackie/Relicable/releases/latest/download/Relicable.zip",
-    "DownloadLinkTesting": "https://github.com/OmegaJackie/Relicable/releases/latest/download/Relicable.zip"
+    "FeedbackMessage": "Please report issues on GitHub: https://github.com/OmegaJackie/RelicAssist/issues - never paste your Early Alpha access code into a report.",
+    "IconUrl": "https://raw.githubusercontent.com/OmegaJackie/RelicAssist/main/icon.png",
+    "DownloadLinkInstall": "https://github.com/OmegaJackie/RelicAssist/releases/latest/download/Relicable.zip",
+    "DownloadLinkUpdate": "https://github.com/OmegaJackie/RelicAssist/releases/latest/download/Relicable.zip",
+    "DownloadLinkTesting": "https://github.com/OmegaJackie/RelicAssist/releases/latest/download/Relicable.zip"
   }
 ]

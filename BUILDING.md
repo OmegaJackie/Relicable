@@ -16,28 +16,31 @@ Dalamud development environment has to be in place before `dotnet build` will do
 
 ## 1. Clone the repository and ECommons
 
-Relicable references [ECommons](https://github.com/NightmareXIV/ECommons) as a sibling project,
-not a NuGet package or a submodule. Clone both next to each other:
+Relicable references [ECommons](https://github.com/NightmareXIV/ECommons) as a project, not a
+NuGet package and not a submodule. Clone ECommons **inside** the repository root:
 
 ```bash
-git clone https://github.com/OmegaJackie/Relicable
+git clone https://github.com/OmegaJackie/RelicAssist
+cd RelicAssist
 git clone https://github.com/NightmareXIV/ECommons
 ```
 
-The result must look like this — `Relicable.csproj` has a `ProjectReference` to
-`..\ECommons\ECommons\ECommons.csproj`, so the relative layout matters:
+The result must look exactly like this. `Relicable.csproj` has a `ProjectReference` to
+`..\ECommons\ECommons\ECommons.csproj`, which resolves relative to `RelicAssist\Relicable\`, so
+ECommons has to sit at the repository root — not beside it:
 
 ```
-<your workspace>/
-  Relicable/          <- this repository
-    Relicable/
-    tools/
-  ECommons/           <- the ECommons clone
+RelicAssist/            <- this repository (the repo root)
+  Relicable/            <- the plugin project
+    Relicable.csproj
+  tools/
+  ECommons/             <- clone it HERE
     ECommons/
+      ECommons.csproj
 ```
 
-ECommons is listed in `.gitignore` on purpose, so cloning it into the workspace will not show up
-as an untracked change.
+ECommons is listed in `.gitignore` on purpose, so the clone will not show up as an untracked
+change.
 
 ## 2. Get the Dalamud dev libraries
 

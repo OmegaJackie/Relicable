@@ -254,7 +254,7 @@ jobs:
             through GitHub issues.
 
             Install via the third-party repository manifest:
-            `https://raw.githubusercontent.com/OmegaJackie/Relicable/main/repo.json`
+            `https://raw.githubusercontent.com/OmegaJackie/RelicAssist/main/repo.json`
             (Dalamud: /xlsettings > Experimental > Custom Plugin Repositories).
             Testing builds must be enabled - this plugin is testing-exclusive.
 

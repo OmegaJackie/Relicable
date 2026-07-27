@@ -67,7 +67,7 @@ changes between builds. Bug reports with a debug log attached are genuinely usef
 2. Under **Custom Plugin Repositories**, add:
 
    ```
-   https://raw.githubusercontent.com/OmegaJackie/Relicable/main/repo.json
+   https://raw.githubusercontent.com/OmegaJackie/RelicAssist/main/repo.json
    ```
 
 3. **Save**, then open `/xlplugins` and install **Relicable**.

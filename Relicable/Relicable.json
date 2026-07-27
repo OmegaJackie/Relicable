@@ -5,7 +5,7 @@
   "Punchline": "Automate the ARR Zodiac relic line",
   "Description": "Data-driven automation engine for the ARR Zodiac relic line. Orchestrates vnavmesh, Rotation Solver Reborn, Lifestream, TextAdvance, and AutoDuty.",
   "ApplicableVersion": "any",
-  "RepoUrl": "https://github.com/OmegaJackie/Relicable",
+  "RepoUrl": "https://github.com/OmegaJackie/RelicAssist",
   "Tags": [ "relic", "zodiac", "automation" ],
   "LoadRequiredState": 0,
   "CanUnloadAsync": false
