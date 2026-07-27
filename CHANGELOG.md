@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.2.3 — Buying the quenching oil opened the wrong Auriana exchange
+
+### Fixed
+
+- **The oil purchase went into Auriana's first Poetics option — the gear one — and sat
+  there.** She does not offer *one* Poetics exchange; she offers several, and every one of
+  them is named "Allagan Tomestones of Poetics (...)". The step matched on the word
+  "poetics", so it always took whichever was listed first: the Disciple of War arms grid,
+  which of course does not stock the oil. The symptom was a repeating *"the Poetics
+  exchange is open but the oil (item 6267) is not listed"*.
+
+  The relic materials are under **Special Arms**, so that is what it looks for now. But
+  rather than swap one guessed word for another, the step works off her actual menu: it
+  ranks her live entries, tries the most likely first, and — this is the part that makes
+  it robust — if a grid opens **without** the oil in it, closes that grid and tries the
+  next entry. Her map exchange and the leave/cancel lines are skipped; everything else
+  gets a turn. So the right category is reached even if the wording is not what we expect,
+  and the only way to fail is genuinely running out of options, which now says so plainly
+  and lists what it tried instead of stalling on a watchdog.
+
 ## 1.5.2.2 — The beastman hunt stops walking past the enemies it needs
 
 ### Changed

@@ -131,6 +131,34 @@ internal static unsafe class DialogueMenu
         return SelectByText(addonName, needle);
     }
 
+    // The addon's real SELECTABLE entry labels, in menu order. Read via AddonMaster, whose Entries
+    // exclude the prompt/header line -- unlike the raw AtkValue string scan in ListEntries, where the
+    // prompt is just another string and shifts every ordinal after it. Use this whenever the caller
+    // needs to reason about the choices themselves (rank them, walk them in turn) rather than match a
+    // single known word; pair it with SelectByTextSafe, which resolves a label back to the right
+    // callback index. Empty when the addon is not open or not ready yet.
+    public static List<string> EntryTexts(string addonName)
+    {
+        var result = new List<string>();
+        if (addonName == "SelectString"
+            && TryGetAddonMaster<AddonMaster.SelectString>("SelectString", out var s) && s.IsAddonReady)
+        {
+            foreach (var e in s.Entries)
+                if (!string.IsNullOrWhiteSpace(e.Text))
+                    result.Add(e.Text);
+            return result;
+        }
+        if (addonName == "SelectIconString"
+            && TryGetAddonMaster<AddonMaster.SelectIconString>("SelectIconString", out var ic) && ic.IsAddonReady)
+        {
+            foreach (var e in ic.Entries)
+                if (!string.IsNullOrWhiteSpace(e.Text))
+                    result.Add(e.Text);
+            return result;
+        }
+        return result;
+    }
+
     private static void FireSelect(AtkUnitBase* addon, int index)
     {
         var values = stackalloc AtkValue[1];
