@@ -17,11 +17,7 @@ it do the wrong thing.
 > **Using this plugin violates the FINAL FANTASY XIV User Agreement.**
 >
 > Square Enix prohibits third-party tools that automate gameplay. Relicable automates movement,
-> combat, FATE participation, duty queuing, NPC interaction and vendor purchases. Accounts have
-> been permanently terminated for exactly this. There is no appeal process that treats
-> automation sympathetically, and no configuration of this plugin makes it safe.
->
-> If your account matters to you, close this page.
+> combat, FATE participation, duty queuing, NPC interaction and vendor purchases.
 >
 > This is unofficial software, not affiliated with or endorsed by Square Enix. You are solely
 > responsible for what you run and what happens to your account. The authors accept no
