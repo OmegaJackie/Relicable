@@ -371,7 +371,17 @@ public sealed class Configuration : IPluginConfiguration
     // separate avoidance preset is not activated, because SetActive is exclusive and would
     // clobber the combat rotation preset (that backend keeps vnavmesh in control of
     // movement instead).
-    public string BossModRebornAvoidancePreset { get; set; } = "VBM Multibox";
+    public string BossModRebornAvoidancePreset { get; set; } = string.Empty;
+
+    // One-time migration marker for the avoidance-preset default. Builds up to 1.5.1.0
+    // shipped "VBM Multibox" here, which contains MiscAI.AutoTarget [Retarget=Always] --
+    // it writes TargetSystem->Target every frame and so hijacked the hard target from
+    // whichever plugin owned the rotation (RSR, and now Wrath Combo) -- plus
+    // MiscAI.FollowSlot, which walked the character into melee against vnavmesh. Saved
+    // configs carry that value forward, so the default change alone would not reach
+    // anyone who already ran the plugin. Applied once, so a deliberate later choice of
+    // "VBM Multibox" is preserved. See External/BossModRebornAvoidancePreset.
+    public bool AvoidancePresetMigratedOffMultibox { get; set; }
 
     // Name of the BossMod Reborn autorotation preset used when Backend == BossModReborn
     // (BMR drives the rotation instead of RSR). Activated via BossMod.Presets.SetActive

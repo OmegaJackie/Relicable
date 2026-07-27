@@ -129,10 +129,19 @@ public sealed class ConfigWindow : Window
             // relic mobs during the beastmen hunt: pointing the COMBAT preset at an AI/movement
             // preset ("VBM Multibox", or the same name as the avoidance preset). Those let BMR
             // pick its own target (skipping non-aggroed mobs) and drive movement against vnavmesh.
+            // Also flag reusing the AVOIDANCE preset name here: that one is movement-only,
+            // so as a combat preset it would run no rotation at all. Combat-specific, hence
+            // checked here rather than inside LooksLikeAiPreset.
             if (LooksLikeAiPreset(_config.BossModRebornCombatPreset))
                 Ui.Wrapped(Red,
                     "This looks like an AI/movement preset. Use a rotation-only preset here, or BossMod Reborn " +
                     "will pick its own targets (skipping neutral enemies) and fight the navigation for movement.");
+            else if (!string.IsNullOrWhiteSpace(_config.BossModRebornCombatPreset)
+                     && string.Equals(_config.BossModRebornCombatPreset, _config.BossModRebornAvoidancePreset,
+                         System.StringComparison.OrdinalIgnoreCase))
+                Ui.Wrapped(Red,
+                    "This is your avoidance preset, which contains no rotation. Leave the field blank to use " +
+                    "Relicable's built-in combat preset.");
         }
         else if (_config.Backend == Configuration.CombatBackend.RotationSolverReborn)
         {
@@ -256,11 +265,30 @@ public sealed class ConfigWindow : Window
         Checkbox("Set chocobo to healer stance", _config.ChocoboHealerStance, v => _config.ChocoboHealerStance = v);
         Checkbox("Use BossMod Reborn AoE avoidance", _config.UseBossModRebornAvoidance, v => _config.UseBossModRebornAvoidance = v);
         var preset = _config.BossModRebornAvoidancePreset;
-        if (ImGui.InputText("BossMod Reborn avoidance preset", ref preset, 64))
+        if (ImGui.InputText("Avoidance preset (blank = built-in)", ref preset, 64))
         {
             _config.BossModRebornAvoidancePreset = preset;
             _dirty = true;
         }
+        Ui.Tooltip("Leave blank (recommended): Relicable installs and uses its own \"" +
+            BossModRebornAvoidancePreset.Name + "\" preset, which contains movement only — it dodges " +
+            "AoE without ever touching your target.\n\n" +
+            "Only name a preset if you built a movement-only one yourself. Do NOT name an AI preset " +
+            "such as 'VBM Multibox': those include AutoTarget, which overwrites your target every " +
+            "frame and fights whichever plugin is running your rotation.");
+
+        // The exact misconfiguration this field shipped as its own default until 1.5.2.0.
+        // AutoTarget writes TargetSystem->Target every frame, so under the RSR and Wrath
+        // backends it takes the hard target away from the plugin that owns the rotation.
+        if (LooksLikeAiPreset(_config.BossModRebornAvoidancePreset))
+            Ui.Wrapped(Red,
+                "This looks like an AI/movement preset. It will overwrite your target every frame and " +
+                "fight your combat plugin for control. Clear the field to use Relicable's built-in " +
+                "avoidance preset instead.");
+
+        Ui.Note("Avoidance only acts while you are standing still, and steps aside for vnavmesh while " +
+            "it is moving you — so it dodges between navigation legs, not during travel.");
+
         if (_config.Backend == Configuration.CombatBackend.BossModReborn)
             ImGui.TextDisabled("(Not used under the BossMod Reborn backend: it would clobber the rotation preset.)");
 
@@ -391,18 +419,20 @@ public sealed class ConfigWindow : Window
         }
     }
 
-    // True when a preset name looks like an AI/movement preset rather than a rotation-only one
-    // -- the known-bad choice for the BossMod Reborn COMBAT preset (it makes BMR pick its own
-    // targets and drive movement, so neutral relic mobs are never pulled). "VBM Multibox" is
-    // BMR's shipped AI preset; reusing the avoidance preset name here is the same mistake.
-    private bool LooksLikeAiPreset(string presetName)
-    {
-        if (string.IsNullOrWhiteSpace(presetName))
-            return false;
-        if (presetName.Contains("Multibox", System.StringComparison.OrdinalIgnoreCase))
-            return true;
-        return string.Equals(presetName, _config.BossModRebornAvoidancePreset, System.StringComparison.OrdinalIgnoreCase);
-    }
+    // True when a preset NAME looks like one of BossMod Reborn's AI/movement presets rather
+    // than a purpose-built one. Those bundle MiscAI.AutoTarget (which writes
+    // TargetSystem->Target every frame) and MiscAI.FollowSlot (which walks the character
+    // into melee), so they are the wrong answer for BOTH of Relicable's preset fields:
+    // as a combat preset BMR then picks its own targets and never pulls a neutral relic
+    // mob; as an avoidance preset it steals the hard target from whichever plugin is
+    // actually running the rotation.
+    //
+    // Name-only on purpose, so it can be asked about either field. The "combat preset
+    // reuses the avoidance preset" check is a separate, combat-specific mistake and lives
+    // at that call site -- folding it in here would make the avoidance field flag itself.
+    private static bool LooksLikeAiPreset(string presetName)
+        => !string.IsNullOrWhiteSpace(presetName)
+           && presetName.Contains("Multibox", System.StringComparison.OrdinalIgnoreCase);
 
     private void DrawDependencies()
     {

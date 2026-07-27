@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.5.2.0 — BossMod Reborn avoidance no longer steals your target
+
+### Fixed
+
+- **The BossMod Reborn avoidance preset defaulted to `"VBM Multibox"`, which hijacked
+  targeting.** That preset contains `MiscAI.AutoTarget [Retarget=Always]`, which writes
+  `Hints.ForcedTarget` every frame — BossMod copies that straight into
+  `TargetSystem->Target`, so it overwrote the hard target belonging to whichever plugin
+  was actually running the rotation. It also contains `MiscAI.FollowSlot`, which walks
+  the character into melee against vnavmesh.
+
+  The avoidance path is active whenever the combat backend is *not* BossMod Reborn — so
+  this affected the Rotation Solver Reborn backend and, as of 1.5.1.0, Wrath Combo.
+  Relicable's own config window already warned that this preset fights navigation, and
+  then shipped it as the default.
+
+  Relicable now installs and uses its own **"Relicable Avoidance"** preset, containing
+  exactly one module: `MiscAI.NormalMovement`. That module is pure movement — it never
+  assigns `Hints.ForcedTarget` and never touches `TargetSystem`. Omitting `AutoTarget`
+  entirely is stronger than setting its `Retarget` track to `Never`, because a module
+  absent from a preset is never instantiated at all.
+
+  Existing configurations are migrated once: a saved `"VBM Multibox"` becomes blank
+  (= use the built-in preset). A deliberate later choice is preserved.
+
+- The config window's AI-preset warning now applies to the **avoidance** field too, which
+  is the field it was always describing. It is name-based now, so it can be asked about
+  either field without the avoidance field flagging itself.
+
+### Notes
+
+Re-verified against the installed BossMod Reborn 7.5.1.35 that avoidance does **not**
+require BossMod's AI loop: `ExecuteHints()` runs unconditionally, and the preset's
+modules run gated only on a preset being active. So keeping `/bmrai` off — which
+Relicable does everywhere, because BossMod's `AIBehaviour` reassigns the active preset
+every frame — costs nothing here.
+
+Two honest limits of preset-based avoidance: it acts only while you are standing still,
+and it stands aside for vnavmesh while that is moving you (BossMod checks the shared
+`vnav.PathIsRunning` flag). So it dodges between navigation legs, not during travel.
+
 ## 1.5.1.0 — Wrath Combo support
 
 ### Added

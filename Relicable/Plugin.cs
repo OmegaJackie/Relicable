@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Dalamud.Game;
 using Dalamud.Game.Command;
@@ -72,6 +73,20 @@ public sealed class Plugin : IDalamudPlugin
             if (_config.ZetaFarmTerritoryType == 172)
                 _config.ZetaFarmTerritoryType = 295;
             _config.ZetaFarmUpgradedToEmbers = true;
+            PluginInterface.SavePluginConfig(_config);
+        }
+
+        // One-time: move the BossMod Reborn avoidance preset off the old "VBM Multibox"
+        // default and onto Relicable's own shipped, movement-only preset (empty = use it).
+        // "VBM Multibox" writes TargetSystem->Target every frame via MiscAI.AutoTarget, so
+        // under the RSR and Wrath Combo backends it fought the plugin that actually owned
+        // the rotation for the hard target. Skipped once applied, so a deliberate later
+        // choice is preserved.
+        if (!_config.AvoidancePresetMigratedOffMultibox)
+        {
+            if (string.Equals(_config.BossModRebornAvoidancePreset, "VBM Multibox", StringComparison.OrdinalIgnoreCase))
+                _config.BossModRebornAvoidancePreset = string.Empty;
+            _config.AvoidancePresetMigratedOffMultibox = true;
             PluginInterface.SavePluginConfig(_config);
         }
 
