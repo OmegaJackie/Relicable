@@ -20,8 +20,8 @@
 # ECommons
 #
 # Relicable has a ProjectReference to ..\ECommons\ECommons\ECommons.csproj, but
-# ECommons is a separate upstream repository cloned next to this one rather than
-# vendored or submoduled. See BUILDING.md step 1. Ignored so the clone does not
+# ECommons is a separate upstream repository cloned INTO this repository root
+# (see BUILDING.md step 1) rather than vendored or submoduled. See BUILDING.md step 1. Ignored so the clone does not
 # show up as thousands of untracked files.
 # ---------------------------------------------------------------------------
 /ECommons/

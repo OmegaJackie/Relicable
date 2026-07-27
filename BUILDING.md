@@ -61,8 +61,9 @@ dotnet build Relicable/Relicable.csproj -c Release
 ```
 
 The first build restores `Dalamud.NET.Sdk/15.0.0` from NuGet, so it needs internet access. Output
-lands in `Relicable/bin/x64/Release/` as `Relicable.dll` with `Relicable.json` and the `Data/`
-JSON files copied alongside.
+lands under `Relicable/bin/Release/` as `Relicable.dll`, with `Relicable.json` and the `Data/`
+JSON files copied alongside. The SDK also writes a packaged plugin zip to
+`Relicable/bin/Release/Relicable/latest.zip`.
 
 **Match the SDK to your Dalamud.** If your installed Dalamud's API level differs from 15, change
 `Dalamud.NET.Sdk/15.0.0` at the top of `Relicable.csproj` to the matching version and rebuild —

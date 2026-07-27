@@ -16,7 +16,7 @@
 #     Dalamud dev distribution and point DALAMUD_HOME at it.
 #
 # NOTE ON THE REPO LAYOUT ASSUMED HERE: the git repository root is the
-# ZodiacRedone folder, i.e. the checkout contains Relicable/, docs/, tools/,
+# RelicAssist repository root, i.e. the checkout contains Relicable/, docs/, tools/,
 # BUILDING.md, and this .github/ folder. ECommons is cloned to ./ECommons so
 # that the ProjectReference ..\ECommons\ECommons\ECommons.csproj resolves.
 # If you instead publish only the Relicable/ folder as the repository, every

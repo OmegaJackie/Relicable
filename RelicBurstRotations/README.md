@@ -7,7 +7,7 @@ while farming Nexus relic light.
 > **Read this first.** RSR 7.5.1.17 does **not** load rotation DLLs from disk. The built
 > `RelicBurstRotations.dll` can never be discovered by the official plugin. Running these rotations
 > requires compiling their source into a **fork of RotationSolver.dll**. See
-> [Install](#install-there-is-no-drop-in-dll-path). Nothing in this project has been tested in-game.
+> [Install](#5-install-there-is-no-drop-in-dll-path). Nothing in this project has been tested in-game.
 
 ---
 

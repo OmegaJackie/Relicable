@@ -66,9 +66,28 @@ public static class AlphaCode
     // timestamp purely to keep the code string short; day granularity is plenty.
     private static readonly DateTime Epoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
+    // Bounds of what Epoch.AddDays can represent. Outside these, AddDays throws
+    // ArgumentOutOfRangeException -- and the day count comes straight out of an
+    // attacker- or typo-controlled payload that is parsed BEFORE the signature is
+    // checked, so it has to be range-checked rather than trusted.
+    // -719162 = 0001-01-01, 2932896 = 9999-12-31, both relative to 1970-01-01.
+    private const int MinEpochDays = -719162;
+    private const int MaxEpochDays = 2932896;
+
     public static int ToEpochDays(DateTime utc) => (int)(utc.Date - Epoch).TotalDays;
 
-    public static DateTime FromEpochDays(int days) => Epoch.AddDays(days);
+    // Returns false instead of throwing when days cannot be represented as a DateTime.
+    public static bool TryFromEpochDays(int days, out DateTime value)
+    {
+        if (days < MinEpochDays || days > MaxEpochDays)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Epoch.AddDays(days);
+        return true;
+    }
 
     // ---------------------------------------------------------------------------
     // Verification
@@ -208,13 +227,15 @@ public static class AlphaCode
         error = string.Empty;
 
         var fields = payload.Split('|');
-        if (fields.Length != 3 || !int.TryParse(fields[1], out var expiryDays))
+        if (fields.Length != 3
+            || !int.TryParse(fields[1], out var expiryDays)
+            || !TryFromEpochDays(expiryDays, out var expires))
         {
             error = "That code is damaged. Copy it again, making sure you get the whole line.";
             return false;
         }
 
-        license = new AlphaLicense(fields[0], FromEpochDays(expiryDays), fields[2]);
+        license = new AlphaLicense(fields[0], expires, fields[2]);
         return true;
     }
 
