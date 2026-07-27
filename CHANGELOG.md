@@ -1,5 +1,132 @@
 # Changelog
 
+## 1.5.2.5 — Finishing a relic sent the run into another job's line
+
+### Fixed
+
+- **Finishing the base relic dropped the engine's sense of progress, and it wandered into
+  another job.** Reported on Bard: the Artemis Bow arrives, and the run immediately shows
+  a **Monk** objective and goes to buy a *second* quenching oil.
+
+  Gerolt hands the finished relic over **unequipped**, and which stage you are on is read
+  off the weapon in your hands. So for the window between receiving it and putting it on,
+  the engine saw no relic at all — which reads as *no relic progress at all*, and
+  selection falls through to whatever sorts first: another job's base relic.
+
+  Three fixes, because one alone would have left the same hole open elsewhere:
+
+  - The line now **equips the relic** as its last step. Every stage transition has this
+    shape — each upgrade hands the new weapon back unequipped too — so this is worth doing
+    at the source, and it is what you want anyway, since the Zenith trade needs the weapon
+    findable.
+  - The progress floor comes from **the highest relic held anywhere** — hands, armoury, or
+    bags — not just an equipped one. It previously looked only for a *Zenith* sitting
+    unequipped, so a bare finished base relic, which is exactly what the line hands you at
+    the end, was invisible to it.
+  - A base-relic objective gated to a quest sequence is now only a candidate once **its own
+    job's quest** has reached that sequence. That gate existed but was only applied while
+    the equipped job was mid-relic; outside that, Monk's oil purchase (gated to sequence
+    19) was eligible with Monk's quest sitting at 0, purely because it was incomplete.
+
+- **Purchases check your retainers first.** Poetics are farmed, so buying a second
+  quenching oil while one sits in a retainer's bag is wasted farming. Retainer contents
+  can't be read unless a retainer is open, so this uses the cache the plugin builds during
+  its own retainer visits — and only in the direction that is safe when slightly stale: it
+  can say "you already have one, don't buy", never "you don't have one". It stops and
+  names the retainer rather than withdrawing, since that needs a summoning bell trip.
+
+### Notes
+
+"Next step: Zenith — 3 Thavnairian Mist" after finishing the relic is correct, not part of
+the bug. Zenith is the next stage, and that trade at the Furnace is still manual.
+
+## 1.5.2.4 — The purchase confirmation was never answered
+
+### Fixed
+
+- **Selecting the oil raised the Yes/No confirmation and nothing clicked it.** Buying
+  anything in this game always raises that prompt after the item is picked — and it opens
+  *on top of* the shop window, which stays open underneath. The step checked the shop
+  first, so it kept re-firing "Exchange" at a window that was blocked waiting on a prompt
+  nobody was answering, until the stuck-menu watchdog gave up.
+
+  The confirmation is now answered before anything else touches a shop window, and
+  answering it is all that happens on that tick — re-running the item pick while the
+  prompt is up fires a selection at the blocked window.
+
+  The same ordering has been applied to the Trials of the Braves book purchase, which had
+  the same shape (it confirmed *and* re-picked on the same tick). The treasure-map restock
+  already did this correctly.
+
+## 1.5.2.3 — Buying the quenching oil opened the wrong Auriana exchange
+
+### Fixed
+
+- **The oil purchase went into Auriana's first Poetics option — the gear one — and sat
+  there.** She does not offer *one* Poetics exchange; she offers several, and every one of
+  them is named "Allagan Tomestones of Poetics (...)". The step matched on the word
+  "poetics", so it always took whichever was listed first: the Disciple of War arms grid,
+  which of course does not stock the oil. The symptom was a repeating *"the Poetics
+  exchange is open but the oil (item 6267) is not listed"*.
+
+  The relic materials are under **Special Arms**, so that is what it looks for now. But
+  rather than swap one guessed word for another, the step works off her actual menu: it
+  ranks her live entries, tries the most likely first, and — this is the part that makes
+  it robust — if a grid opens **without** the oil in it, closes that grid and tries the
+  next entry. Her map exchange and the leave/cancel lines are skipped; everything else
+  gets a turn. So the right category is reached even if the wording is not what we expect,
+  and the only way to fail is genuinely running out of options, which now says so plainly
+  and lists what it tried instead of stalling on a watchdog.
+
+## 1.5.2.2 — The beastman hunt stops walking past the enemies it needs
+
+### Changed
+
+- **The 24-beastman hunt is one step now, not three.** The journal asks for eight each of
+  three types, and those three spawn groups are mixed together across a single
+  stronghold — so killing them one type at a time meant walking past two thirds of the
+  enemies that still needed killing, then walking the same ground again, and again.
+  Reported as the hunt taking significantly longer than it should.
+
+  It now takes whichever wanted type is **nearest**, so the stronghold is cleared in
+  roughly one pass instead of three.
+
+  The quest caps each type at eight and silently ignores kills past that, so a type is
+  retired once it stops counting — otherwise the last few kills would go to whatever
+  happened to be standing closest. Two independent signals retire a type: eight local
+  kills of it, and (surviving a re-plan, which resets local counts) two kills that
+  produced no rise in the quest's own counter, each judged only after a 5s grace so a
+  credit landing a frame late cannot be mistaken for a cap. If every type ends up retired
+  while the hunt is unfinished, the retirements are thrown away and all three are
+  re-offered — a wrong guess costs a few kills, never a stall.
+
+  Completion is unchanged: the sum of the three quest counters reaching 24.
+
+### Fixed
+
+- **The unfinished relic is equipped the moment Gerolt hands it over** (sequence 9),
+  rather than being left in a bag for the hunt objective to notice. The hunt is a long
+  trip to a stronghold; arriving to find the weapon was never equipped cost the trip.
+
+  Auto-equip also stopped giving up after one look. The weapon takes a server round-trip
+  to land in your bags after a turn-in, so the single check at step start usually missed
+  it and failed with "none found" for a weapon that was about to appear. It now retries
+  for up to 10 seconds.
+
+- **"Give the unfinished \<weapon\> to Gerolt" (sequence 14) takes the weapon off first.**
+  The hand-over UI lists your inventory and armoury but not what is in your hands, so that
+  step could never be satisfied while the relic was equipped. If the turn-in does not
+  happen — aborted, failed, re-planned — the weapon goes straight back on, so a stalled
+  step cannot leave you bare-handed.
+
+- **Unequipping for a turn-in no longer makes the engine forget your progress.** Which
+  stage you are on is read off the equipped weapon, so for the length of any trip that
+  requires the weapon off — the two Jalzahn trades and the sequence-14 hand-over — that
+  read was "no relic at all", which re-opened stages you finished long ago for selection.
+  Those steps now record the tier before unequipping, and planning falls back to it while
+  the hands are empty. Deliberately narrow: a live read always wins, the stand-in is
+  dropped the instant a relic is equipped again, and it expires on its own.
+
 ## 1.5.2.1 — "A Relic Reborn" was missing both Rowena steps
 
 ### Fixed

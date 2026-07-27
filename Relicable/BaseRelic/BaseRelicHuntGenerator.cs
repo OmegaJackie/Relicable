@@ -90,10 +90,21 @@ public static class BaseRelicHuntGenerator
             AddGeroltTurnIn(result, job, 5, "deliver the Alumina Salts, report the Chimera");
             AddRowenaTurnIn(result, job, 6, "speak with Rowena about the relic's hero");
             AddRowenaTurnIn(result, job, 8, "deliver the Amdapor Glyph to Rowena");
-            AddGeroltTurnIn(result, job, 9, "deliver the hero's tome copy to Gerolt");
+            // Sequence 9 is where Gerolt forges the UNFINISHED relic and hands it over, and sequence
+            // 10 -- the very next step -- is "arm yourself with the unfinished <weapon> and slay...".
+            // So the turn-in equips it on the spot (equipRelicAfter) instead of leaving it in the bag
+            // for the hunt objective to notice: the hunt is a long trip to a stronghold, and arriving
+            // there to discover the weapon was never equipped costs the whole trip. The hunt keeps its
+            // own equip step as a backstop for a player who starts mid-hunt.
+            AddGeroltTurnIn(result, job, 9, "deliver the hero's tome copy, equip the unfinished relic",
+                equipRelicAfter: true);
             AddGeroltTurnIn(result, job, 11, "report the beastman hunt");
             AddGeroltTurnIn(result, job, 13, "report the Hydra");
-            AddGeroltTurnIn(result, job, 14, "hand over the unfinished relic");
+            // Sequence 14 hands the unfinished relic BACK to Gerolt, and the hand-over UI does not
+            // list equipped items -- so it has to come off first (StepData.UnequipRelicFirst, which
+            // also restores it if the turn-in does not happen and keeps the stage read from reading
+            // "no relic" meanwhile).
+            AddGeroltTurnIn(result, job, 14, "hand over the unfinished relic", unequipRelicFirst: true);
             AddGeroltTurnIn(result, job, 18, "deliver the primal drops (ember, gale, ore)");
 
             // The FINAL step (seq 19): buy the quenching oil from Auriana, then turn it in to Gerolt.
@@ -214,6 +225,15 @@ public static class BaseRelicHuntGenerator
             NpcDataId = BaseRelicData.GeroltDataId,
             Position = BaseRelicData.GeroltPosition,
         });
+        // EQUIP the finished relic. Gerolt hands it over UNEQUIPPED, and the engine reads which stage
+        // a character is on from the weapon in their hands -- so until this runs the line looks
+        // finished-but-invisible: no relic equipped reads as no relic progress, and selection falls
+        // through to whatever sorts first, which is another job's base relic. Reported live on Bard:
+        // "just got the Artemis Bow, but it went back to buy another quenching oil and the objective
+        // says Monk". GameState.HighestHeldRelicStage now covers the gap defensively; equipping it
+        // here is the actual fix, and it is what the player wants anyway (Zenith is next, and that
+        // trade wants the weapon in hand to be found).
+        steps.Add(new StepData { Type = StepType.EnsureRelicEquipped });
 
         result.Add(new RelicObjective
         {
@@ -235,9 +255,11 @@ public static class BaseRelicHuntGenerator
     // hand-in, the interaction still runs and the run stops with the pending-turn-in guidance, no worse
     // than before. The seq-14 hand-over of the equipped unfinished relic relies on the game's own
     // handover UI (which offers the equipped item); verify in-game.
-    private static void AddGeroltTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label)
+    private static void AddGeroltTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label,
+        bool unequipRelicFirst = false, bool equipRelicAfter = false)
         => AddNpcTurnIn(result, job, activeSeq, label, "Gerolt, Hyrstmill",
-            BaseRelicData.GeroltDataId, BaseRelicData.GeroltTerritory, BaseRelicData.GeroltPosition);
+            BaseRelicData.GeroltDataId, BaseRelicData.GeroltTerritory, BaseRelicData.GeroltPosition,
+            unequipRelicFirst, equipRelicAfter);
 
     // The two ROWENA steps (sequences 6 and 8): Gerolt sends you to her at Revenant's Toll for the
     // hero's tome, and it is Rowena -- not Gerolt -- who takes the Amdapor Glyph. Identical shape to
@@ -249,7 +271,8 @@ public static class BaseRelicHuntGenerator
             MapCoords.MapToWorld(BaseRelicData.RowenaTerritory, BaseRelicData.RowenaMapX, BaseRelicData.RowenaMapY));
 
     private static void AddNpcTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label,
-        string where, uint npcDataId, uint territory, System.Numerics.Vector3 position)
+        string where, uint npcDataId, uint territory, System.Numerics.Vector3 position,
+        bool unequipRelicFirst = false, bool equipRelicAfter = false)
     {
         var steps = new List<StepData>();
         var aetheryte = Locations.AetheryteForTerritory(territory);
@@ -260,7 +283,12 @@ public static class BaseRelicHuntGenerator
             Type = StepType.InteractNpc,
             NpcDataId = npcDataId,
             Position = position,
+            UnequipRelicFirst = unequipRelicFirst,
         });
+        // Equip what the turn-in just handed over (the unfinished relic at sequence 9), so the next
+        // objective does not travel to the hunt with it sitting in a bag.
+        if (equipRelicAfter)
+            steps.Add(new StepData { Type = StepType.EnsureRelicEquipped });
 
         result.Add(new RelicObjective
         {
@@ -275,9 +303,23 @@ public static class BaseRelicHuntGenerator
         });
     }
 
-    // The Part 5 beastmen hunt: teleport to the stronghold aetheryte, then three KillTarget
-    // steps (8 of each beastman) at the world-converted spawn coords. The quest credits the
-    // kills and advances on its own; no Gerolt report is needed.
+    // The Part 5 beastmen hunt: teleport to the stronghold aetheryte, then ONE KillTarget step that
+    // accepts all three beastman types. The quest credits the kills and advances on its own; no
+    // Gerolt report is needed.
+    //
+    // One step, not three. The journal asks for eight of each of three types, and the three spawn
+    // groups are INTERMINGLED across a single stronghold -- so running them as three sequential
+    // single-name steps meant clearing one type while walking past the other two, then walking the
+    // same ground again for the second, and again for the third. Reported as the hunt taking
+    // significantly longer than it should. With one step the executor takes whichever wanted type is
+    // NEAREST, so the stronghold is cleared in roughly one pass; it retires a type once that type is
+    // capped (KillTargetExecutor tracks this per name) so the last few kills still go to the types
+    // that actually still credit.
+    //
+    // Completion is unchanged and still the SUM of the three quest counters (24), which is
+    // mapping-free (no need to know which nibble is which mob), race-free (the sum is conserved
+    // regardless of which type a kill credits or when) and restart-proof (the counters are read from
+    // the game, not an in-memory tally Start() would zero).
     private static void AddBeastmenObjective(List<RelicObjective> result, RelicJob job, JobRelicData data)
     {
         var territory = data.BeastmenHunt.TerritoryTypeId;
@@ -289,25 +331,27 @@ public static class BaseRelicHuntGenerator
         if (aetheryte != 0)
             steps.Add(new StepData { Type = StepType.AetheryteTeleport, AetheryteId = aetheryte });
 
-        // Cumulative quest-counter target: mob 1 done at total 8, mob 2 at 16, mob 3 at 24.
-        // The step completes on the SUM of the three quest counters reaching this, which is
-        // mapping-free (no need to know which nibble is which mob), race-free (the sum is
-        // conserved regardless of which type a kill credits or when) and restart-proof (the
-        // counters are read from the game, not an in-memory tally Start() would zero).
-        var cumulative = 0;
+        var total = 0;
         foreach (var mob in data.Beastmen)
+            total += mob.Count;
+
+        steps.Add(new StepData
         {
-            cumulative += mob.Count;
-            steps.Add(new StepData
-            {
-                Type = StepType.KillTarget,
-                TargetName = mob.Name,
-                Count = mob.Count,
-                Position = MapCoords.MapToWorld(territory, mob.MapX, mob.MapY, mob.MapZ),
-                UseQuestKillCounter = true,
-                QuestCounterTarget = cumulative,
-            });
-        }
+            Type = StepType.KillTarget,
+            // TargetName stays the first type, for the log lines and the objective's map flag; the
+            // SET below is what the acquire actually matches on.
+            TargetName = data.Beastmen[0].Name,
+            TargetNames = data.Beastmen.Select(m => m.Name).ToList(),
+            Count = total,
+            // The stronghold anchor rather than a per-mob coordinate: with all three types wanted at
+            // once there is one place to travel to, and the executor's outward search covers the
+            // spread from there (the per-type coordinates only ever differed by a few yalms inside
+            // the same camp anyway).
+            Position = MapCoords.MapToWorld(territory, data.BeastmenHunt.MapX, data.BeastmenHunt.MapY,
+                data.BeastmenHunt.MapZ),
+            UseQuestKillCounter = true,
+            QuestCounterTarget = total,
+        });
 
         result.Add(new RelicObjective
         {

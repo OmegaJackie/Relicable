@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Numerics;
 using System.Text.Json.Serialization;
 
@@ -25,6 +26,16 @@ public sealed class StepData
     public uint TargetDataId { get; set; }
     public int Count { get; set; } = 1;
     public bool FateBound { get; set; }
+
+    // Several enemy names that ALL count for this one KillTarget step, so it takes whichever is
+    // nearest rather than clearing them one type at a time. Empty = single-target (TargetName).
+    //
+    // The base relic's beastman hunt is the case this exists for: "slay eight lancers, eight
+    // pugilists and eight thaumaturges" is one journal step over three intermingled spawn groups,
+    // and running it as three sequential single-name steps meant walking past two thirds of the
+    // enemies that still needed killing on every lap. TargetName is still set (to the first name)
+    // for logs and the map flag. See KillTargetExecutor for how types are retired at their cap.
+    public List<string> TargetNames { get; set; } = new();
 
     // Opt-in: this KillTarget step's progress is tracked by the relic quest's own
     // QuestWork counters rather than a local kill tally. Set ONLY by
@@ -74,6 +85,18 @@ public sealed class StepData
 
     // Interaction
     public uint NpcDataId { get; set; }
+
+    // InteractNpc: take the relic weapon OFF before talking, because the game's hand-over UI lists
+    // inventory and armoury items but NOT what is currently in your hands -- so a quest step that
+    // asks for the equipped relic ("Give the unfinished <weapon> to Gerolt") can never be satisfied
+    // while it is equipped.
+    //
+    // The executor restores it on the way out if the conversation did NOT consume it (an aborted or
+    // failed turn-in), so a stalled step can never leave the character bare-handed. It also records
+    // the stage into RelicStageMemo first, so the engine's "which stage is this character on" read --
+    // which is derived from the EQUIPPED weapon -- does not read None and regress planning during the
+    // window where the weapon is deliberately off.
+    public bool UnequipRelicFirst { get; set; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public InteractionType Interaction { get; set; }

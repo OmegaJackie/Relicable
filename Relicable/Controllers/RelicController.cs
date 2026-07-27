@@ -315,7 +315,13 @@ public sealed class RelicController
         // the later stages (Novus and beyond) instead of stopping. The relic note id
         // remains reported as active even after the book is done, so without this the
         // pool would be empty and the run would halt at the start of Novus.
-        var incomplete = _objectives.Where(o => !IsObjectiveComplete(o)).ToList();
+        // Incomplete AND actually due: a base-relic objective gated to a quest sequence is only a
+        // candidate once ITS OWN job's quest has reached that sequence (BaseRelicState.IsSequenceEligible).
+        // Applied here, before either selection mode, so the gate holds outside the base-relic branch
+        // too -- that hole is what let a finished relic wander into another job's line.
+        var incomplete = _objectives
+            .Where(o => !IsObjectiveComplete(o) && BaseRelicState.IsSequenceEligible(o))
+            .ToList();
         List<RelicObjective> pool;
 
         if (_ctx.Config.StageMode == StageSelectionMode.Manual)
@@ -348,17 +354,28 @@ public sealed class RelicController
             // engine there even for a player already holding a Nexus (or later) weapon.
             // That is the "Nexus seen as Novus" symptom. Manual mode intentionally skips
             // this so a passed stage can still be revisited to farm more.
-            var completedStage = GameState.EquippedRelicStage();
-            // A finished base relic sitting UNEQUIPPED (a Zenith parked in the armoury/bags, e.g. a
-            // repeat relic, or one the player unequipped) reads as None from the equipped-slot scan.
-            // Left unbounded, the pool would then mis-route a 12/12-atma player into ANOTHER job's
-            // incomplete base-relic objectives (they are Stage=Relic and sort ahead of the Atma work).
-            // Treat a held Zenith as proving the Relic tier, so the lower-bound drops those and the
-            // Atma-stage gate below (guarded on completedStage == Relic) engages. Only fires when no
-            // relic weapon is equipped, so a higher-tier equipped weapon is never downgraded.
-            if (completedStage == RelicStage.None
-                && GameState.TryFindHeldRelic(Data.RelicWeaponStages.IsZenithWeapon, includeEquipped: true, out _, out _, out _))
-                completedStage = RelicStage.Relic;
+            // The equipped read, or -- while a step has deliberately taken the weapon OFF for a
+            // turn-in it could not otherwise make (the Jalzahn trades, the sequence-14 hand-over) --
+            // the tier it noted before doing so. Without that stand-in the live read is None for the
+            // length of the trip, which means "no progress at all" here and re-opens finished stages.
+            var completedStage = Steps.RelicStageMemo.EffectiveEquippedStage();
+            // A relic sitting UNEQUIPPED -- in the armoury or a bag -- reads as None from the
+            // equipped-slot scan, and None means "no progress at all" to the filter below, which then
+            // mis-routes into work the character has already finished: other jobs' base relics are
+            // Stage=Relic and sort ahead of everything.
+            //
+            // That window is not an edge case, it is what every stage transition looks like. Each
+            // upgrade -- and the base relic's own final turn-in -- hands the new weapon back
+            // unequipped. Reported live: finishing the Artemis Bow on Bard, and the run immediately
+            // showing a Monk objective and going to buy a second quenching oil, because for those few
+            // seconds the engine could not see that any relic existed.
+            //
+            // So the floor comes from the highest relic held ANYWHERE, not just an equipped one (and
+            // not just a Zenith, which is all this used to look for -- a bare finished base relic,
+            // exactly what the line hands you at the end, was invisible to it). Only consulted when
+            // nothing is equipped, so a worn higher-tier weapon is never downgraded by a spare.
+            if (completedStage == RelicStage.None)
+                completedStage = GameState.HighestHeldRelicStage();
             var advanced = completedStage == RelicStage.None
                 ? incomplete
                 : incomplete.Where(o => (int)o.Stage > (int)completedStage).ToList();
