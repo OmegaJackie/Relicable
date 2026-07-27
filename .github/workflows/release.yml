@@ -231,10 +231,24 @@ jobs:
       # ------------------------------------------------------------------
       # 7. Release
       #
-      # Only for tag pushes. The release is marked as a prerelease because
-      # Relicable is an EARLY ALPHA (repo.json also sets IsTestingExclusive).
-      # The asset name must stay "Relicable.zip" - repo.json's download links
-      # point at /releases/latest/download/Relicable.zip.
+      # Only for tag pushes. The asset name must stay "Relicable.zip" -
+      # repo.json's download links point at /releases/latest/download/Relicable.zip.
+      #
+      # prerelease MUST BE FALSE, even though this is an early alpha.
+      # GitHub's /releases/latest/ endpoint resolves to the latest FULL release and
+      # deliberately skips drafts and prereleases. Marking the release as a prerelease
+      # therefore leaves /releases/latest/download/Relicable.zip returning 404 - the
+      # install fails for every tester with "Response status code does not indicate
+      # success: 404 (Not Found)" out of Dalamud's PluginManager.DownloadPluginAsync,
+      # which looks like a broken plugin but is really a URL with nothing behind it.
+      # (make_latest cannot rescue this: GitHub will not treat a prerelease as latest.)
+      #
+      # Nothing is lost by dropping the flag. The alpha status is carried where it
+      # actually matters: repo.json sets IsTestingExclusive, so Dalamud only offers the
+      # plugin to users who have enabled testing builds, and the release notes below say
+      # it outright. The alternative - keeping the badge and pointing repo.json at
+      # /releases/download/<tag>/Relicable.zip - would mean editing repo.json on every
+      # single release, which is a much easier thing to forget.
       # ------------------------------------------------------------------
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -244,7 +258,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: artifacts/Relicable.zip
           draft: false
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
           body: |
             **Relicable ${{ github.ref_name }} - Early Alpha**
