@@ -101,6 +101,26 @@ public sealed class BuyRadzOilExecutor : ITaskExecutor
             return ExecutorStatus.Failed;
         }
 
+        // A purchase confirmation ALWAYS follows picking an item, and it is checked FIRST because it
+        // opens on top of a shop window that stays open underneath it: the grid and the quantity
+        // dialog both still report as open, so driving them first means re-firing "Exchange" at a
+        // window that is waiting on a Yes/No nobody is answering. That is the reported "it doesn't
+        // click yes on the dialogue box after selecting the oil" -- the purchase never completed and
+        // the step burned its stuck timer one tick at a time.
+        //
+        // Nothing else runs on a tick that answers a prompt: the selection underneath has already
+        // been made, and re-firing it while the prompt is up is what would double-buy or cancel it.
+        if (DialogueMenu.IsOpen("SelectYesno"))
+        {
+            if (Environment.TickCount64 - _lastMenuAction >= MenuActionCooldownMs)
+            {
+                _lastMenuAction = Environment.TickCount64;
+                if (DialogueMenu.ConfirmYes())
+                    DebugLog.Info("Buy oil: confirming the purchase prompt");
+            }
+            return ExecutorStatus.InProgress;
+        }
+
         // The Poetics tomestone grid is open -> buy the oil (and confirm any quantity dialog).
         if (TryDriveShop(oil))
             return ExecutorStatus.InProgress;
@@ -135,7 +155,6 @@ public sealed class BuyRadzOilExecutor : ITaskExecutor
             {
                 _lastMenuAction = Environment.TickCount64;
                 TrySelectExchange();
-                DialogueMenu.ConfirmYes(); // in case selecting the oil pops a Yes/No buy prompt
             }
             return ExecutorStatus.InProgress;
         }

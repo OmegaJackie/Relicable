@@ -187,8 +187,12 @@ public sealed class BuyRelicBookExecutor : ITaskExecutor
                     if (Environment.TickCount64 - _lastMenuAction >= MenuActionCooldownMs)
                     {
                         _lastMenuAction = Environment.TickCount64;
-                        TrySelectBook();
-                        DialogueMenu.ConfirmYes();
+                        // Answer a confirmation prompt INSTEAD of picking, never as well as: buying
+                        // an item always raises one, and it opens on top of a shop window that is
+                        // still reported as open -- so re-running the pick on the same tick fires a
+                        // selection at a window that is waiting on the Yes/No.
+                        if (!DialogueMenu.ConfirmYes())
+                            TrySelectBook();
                     }
                     _doneDeadline = 0; // a menu is still up; the purchase is not finished
                     return ExecutorStatus.InProgress;

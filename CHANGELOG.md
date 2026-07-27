@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.2.4 — The purchase confirmation was never answered
+
+### Fixed
+
+- **Selecting the oil raised the Yes/No confirmation and nothing clicked it.** Buying
+  anything in this game always raises that prompt after the item is picked — and it opens
+  *on top of* the shop window, which stays open underneath. The step checked the shop
+  first, so it kept re-firing "Exchange" at a window that was blocked waiting on a prompt
+  nobody was answering, until the stuck-menu watchdog gave up.
+
+  The confirmation is now answered before anything else touches a shop window, and
+  answering it is all that happens on that tick — re-running the item pick while the
+  prompt is up fires a selection at the blocked window.
+
+  The same ordering has been applied to the Trials of the Braves book purchase, which had
+  the same shape (it confirmed *and* re-picked on the same tick). The treasure-map restock
+  already did this correctly.
+
 ## 1.5.2.3 — Buying the quenching oil opened the wrong Auriana exchange
 
 ### Fixed

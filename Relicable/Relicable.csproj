@@ -27,9 +27,9 @@
     <LangVersion>latest</LangVersion>
     <!-- Bumped by 0.0.0.1 each change so the dev plugin shows the update.
          Release history lives in CHANGELOG.md, not in this file. -->
-    <Version>1.5.2.3</Version>
-    <AssemblyVersion>1.5.2.3</AssemblyVersion>
-    <FileVersion>1.5.2.3</FileVersion>
+    <Version>1.5.2.4</Version>
+    <AssemblyVersion>1.5.2.4</AssemblyVersion>
+    <FileVersion>1.5.2.4</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
