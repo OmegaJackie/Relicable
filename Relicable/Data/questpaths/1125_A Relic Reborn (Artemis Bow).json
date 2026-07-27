@@ -73,22 +73,16 @@
           "Fly": true
         }
       ]
-    },
-    {
-      "Sequence": 255,
-      "Steps": [
-        {
-          "DataId": 1003075,
-          "Position": {
-            "X": 440.726,
-            "Y": -0.937455,
-            "Z": -62.1923
-          },
-          "TerritoryId": 154,
-          "InteractionType": "CompleteQuest",
-          "Fly": true
-        }
-      ]
     }
+    // NO final "Sequence: 255" CompleteQuest block. The last journal entry is "obtain a bottle of
+    // Radz-at-Han quenching oil and deliver it to Gerolt", and a bare Interact cannot satisfy it --
+    // the oil has to be bought from Auriana first. That is what the generated oil objective does
+    // (BaseRelicHuntGenerator.AddOilTurnIn: teleport -> BuyRadzOil -> teleport -> Interact).
+    //
+    // A sequence-driven path step OUTRANKS every generated objective at the same sequence and, once
+    // run, the controller returns and waits for the sequence to advance -- so a 255 block here would
+    // walk Bard to Gerolt empty-handed and then stall forever, never falling through to the oil
+    // purchase. Removed in 1.5.2.1; the generated objective now finishes the line for all ten jobs
+    // identically. (This block was an auto-generated bookend from gen_quest_tables, not a capture.)
   ]
 }

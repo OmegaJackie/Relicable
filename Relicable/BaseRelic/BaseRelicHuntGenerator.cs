@@ -60,40 +60,43 @@ public static class BaseRelicHuntGenerator
             foreach (var duty in Duties.Where(d => d.Part > 5))
                 AddDutyObjective(result, job, duty);
 
-            // Between-trial Gerolt turn-ins. The base-relic quest parks at these sequences until you
-            // report to / deliver items to Gerolt before the next trial can begin. Verified across all
-            // 10 jobs' quest text (all Gerolt): deliver the Alumina Salts after the Chimera (seq 7 -> 8),
-            // report to Gerolt after the Amdapor Glyph trade to Rowena (seq 9 -> 10), report the beastman
-            // hunt (seq 11 -> 12), report the Hydra (13 -> 14), hand over the unfinished relic (14 -> 15),
-            // and deliver the three primal drops (18 -> 19). Each is a teleport + interact, gated to its
-            // exact sequence.
+            // The between-content NPC steps. The quest parks at each of these until you talk to the
+            // right person, and no later trial can start until it does, so every one is driven here as
+            // a teleport + interact gated to its exact sequence. The full journal-to-sequence map lives
+            // in BaseRelicData.GlobalParts; the entries below are the ones that are pure conversation:
             //
-            // The Alumina Salts hand-over (seq 7) BLOCKS Amdapor Keep (part 4, gated to seq 8): reported
-            // live, after the Chimera the run tried to enter Amdapor Keep, but the quest parks at seq 7 to
-            // hand the Alumina Salts to Gerolt first. Amdapor Keep's ActiveFromSequence (BaseRelicData
-            // part 4) now holds it until this turn-in advances the quest to seq 8.
+            //    3  deliver the melded class weapon to Gerolt  -> the Chimera (4)
+            //    5  deliver the Alumina Salts to Gerolt        -> Rowena (6)
+            //    6  SPEAK WITH ROWENA at Revenant's Toll       -> Amdapor Keep (7)
+            //    8  deliver the Amdapor Glyph to ROWENA        -> the tome copy (9)
+            //    9  deliver the tome copy to Gerolt            -> the beastman hunt (10)
+            //   11  report the beastman hunt to Gerolt         -> the Hydra (12)
+            //   13  report the Hydra to Gerolt                 -> the hand-over (14)
+            //   14  hand the unfinished relic to Gerolt        -> the primals (15-17)
+            //   18  deliver the three primal drops to Gerolt   -> the oil (19)
             //
-            // The seq-9 Gerolt report follows the Amdapor Glyph trade to Rowena: reported live, after
-            // Amdapor Keep the quest parks (seq 8) for the Rowena glyph trade (advancing to seq 9, still a
-            // manual SEAM -- Rowena's shop id is not authored), and then needs a report to Gerolt that the
-            // run did not auto-route to. This turn-in supplies it, advancing seq 9 -> 10 (where the
-            // beastman hunt, ActiveFromSequence 10, then becomes active). SEAM: the seq-9 placement is
-            // constrained (Amdapor at 8, beastmen verified at 10) but wants an in-game confirm.
-            // Part 2's tail: the melded class weapon is delivered to Gerolt at sequence 5, the journal
-            // step immediately before the Chimera. Obtaining the weapon (seq 3) and melding the two
-            // Grade III materia (seq 4) cannot be automated -- they are surfaced as the annotated
+            // The two ROWENA steps (6 and 8) were missing entirely before 1.5.2.1, which left the run
+            // parked with nothing eligible the moment the Alumina Salts were handed over -- and, because
+            // the sequence table had been shifted to close the gap, trying to queue the Chimera while
+            // the journal actually read "Speak with Rowena". They are the same teleport + interact as
+            // the Gerolt turn-ins, just at a different NPC.
+            //
+            // Sequence 3 (the class weapon) is driven here too. Obtaining the weapon and melding the
+            // two Grade III materia cannot be automated -- they are surfaced as the annotated
             // class-weapon step instead (Data/ClassWeaponStep, Windows/ClassWeaponPanel) -- but the
-            // hand-over is the same teleport + interact every other Gerolt turn-in uses, so it is
-            // driven here rather than leaving the run parked at 5 with nothing eligible.
-            AddGeroltTurnIn(result, job, 5, "deliver the melded class weapon");
-            AddGeroltTurnIn(result, job, 7, "deliver the Alumina Salts, report the Chimera");
-            AddGeroltTurnIn(result, job, 9, "report to Gerolt after the Amdapor Glyph trade (Rowena)");
+            // hand-over itself is an ordinary turn-in, so the run does not sit at 3 with nothing
+            // eligible once the player has the melded weapon in the bag.
+            AddGeroltTurnIn(result, job, 3, "deliver the melded class weapon");
+            AddGeroltTurnIn(result, job, 5, "deliver the Alumina Salts, report the Chimera");
+            AddRowenaTurnIn(result, job, 6, "speak with Rowena about the relic's hero");
+            AddRowenaTurnIn(result, job, 8, "deliver the Amdapor Glyph to Rowena");
+            AddGeroltTurnIn(result, job, 9, "deliver the hero's tome copy to Gerolt");
             AddGeroltTurnIn(result, job, 11, "report the beastman hunt");
             AddGeroltTurnIn(result, job, 13, "report the Hydra");
             AddGeroltTurnIn(result, job, 14, "hand over the unfinished relic");
             AddGeroltTurnIn(result, job, 18, "deliver the primal drops (ember, gale, ore)");
 
-            // The FINAL step (seq 255): buy the quenching oil from Auriana, then turn it in to Gerolt.
+            // The FINAL step (seq 19): buy the quenching oil from Auriana, then turn it in to Gerolt.
             AddOilTurnIn(result, job);
         }
 
@@ -183,11 +186,16 @@ public static class BaseRelicHuntGenerator
             Completion = new CompletionCondition { Kind = CompletionKind.AllStepsDone },
         };
 
-    // The FINAL base-relic step (quest sequence 255): buy a Radz-at-Han Quenching Oil from Auriana
-    // (Revenant's Toll, 15 Poetics) and turn it in to Gerolt (Hyrstmill) for the finished relic. Gated
-    // to the quest's terminal sequence (255, where the tracker parks the relic on the "oil" line); it
+    // The FINAL base-relic step (quest sequence 19): buy a Radz-at-Han Quenching Oil from Auriana
+    // (Revenant's Toll, 15 Poetics) and turn it in to Gerolt (Hyrstmill) for the finished relic. It
     // completes when the QUEST itself completes (IsPartCompleteByQuest's quest-done branch), which is
-    // why CompleteAtSequence stays 0 -- 255 is not a "passed" threshold, it is the step we run AT.
+    // why CompleteAtSequence stays 0 -- 19 is not a "passed" threshold, it is the step we run AT.
+    //
+    // The gate is a LOWER bound (>= 19), not the exact 255 it used to be, because the last journal
+    // entry is 19 and only some quests report the terminal step as 0xFF. Either value satisfies >= 19,
+    // so this runs whichever convention the quest uses; the old exact-255 gate would simply never fire
+    // if the quest parks at 19. Nothing else is eligible that late -- every other objective completes
+    // at 18 or earlier -- so the loose bound costs nothing.
     // Steps: teleport to Mor Dhona -> buy the oil (BuyRadzOil) -> teleport to Gerolt's zone -> turn in
     // (InteractNpc + TextAdvance). SEAM: Auriana's exchange wording and the final Gerolt turn-in window
     // are offline-unverifiable; best-effort with logging + safe-fail (verify in-game).
@@ -214,13 +222,13 @@ public static class BaseRelicHuntGenerator
             Id = $"relic-{job}-oil-turnin",
             DisplayName = $"{RelicJobs.DisplayName(job)}: buy the quenching oil (Auriana), finish at Gerolt",
             Steps = steps,
-            ActiveFromSequence = 255,
+            ActiveFromSequence = BaseRelicData.ActiveFromSequenceFor(10),
             CompleteAtSequence = 0, // completes only when the quest itself completes (the final turn-in)
             Completion = new CompletionCondition { Kind = CompletionKind.AllStepsDone },
         });
     }
 
-    // A between-trial turn-in to Gerolt (Hyrstmill, North Shroud): teleport to his zone, then Interact;
+    // A between-content turn-in to Gerolt (Hyrstmill, North Shroud): teleport to his zone, then Interact;
     // TextAdvance carries the dialogue and the item hand-over. Gated to its EXACT quest sequence (active
     // = seq, complete = seq + 1), so it runs only while the quest is parked at that turn-in and completes
     // the moment the quest advances past it (IsPartCompleteByQuest). If TextAdvance is not carrying the
@@ -228,16 +236,30 @@ public static class BaseRelicHuntGenerator
     // than before. The seq-14 hand-over of the equipped unfinished relic relies on the game's own
     // handover UI (which offers the equipped item); verify in-game.
     private static void AddGeroltTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label)
+        => AddNpcTurnIn(result, job, activeSeq, label, "Gerolt, Hyrstmill",
+            BaseRelicData.GeroltDataId, BaseRelicData.GeroltTerritory, BaseRelicData.GeroltPosition);
+
+    // The two ROWENA steps (sequences 6 and 8): Gerolt sends you to her at Revenant's Toll for the
+    // hero's tome, and it is Rowena -- not Gerolt -- who takes the Amdapor Glyph. Identical shape to
+    // the Gerolt turn-ins, just a different zone and NPC; both are plain conversations that TextAdvance
+    // carries, and the glyph hand-over is a quest delivery in dialogue, not a shop exchange.
+    private static void AddRowenaTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label)
+        => AddNpcTurnIn(result, job, activeSeq, label, "Rowena, Revenant's Toll",
+            BaseRelicData.RowenaDataId, BaseRelicData.RowenaTerritory,
+            MapCoords.MapToWorld(BaseRelicData.RowenaTerritory, BaseRelicData.RowenaMapX, BaseRelicData.RowenaMapY));
+
+    private static void AddNpcTurnIn(List<RelicObjective> result, RelicJob job, int activeSeq, string label,
+        string where, uint npcDataId, uint territory, System.Numerics.Vector3 position)
     {
         var steps = new List<StepData>();
-        var aetheryte = Locations.AetheryteForTerritory(BaseRelicData.GeroltTerritory);
+        var aetheryte = Locations.AetheryteForTerritory(territory);
         if (aetheryte != 0)
             steps.Add(new StepData { Type = StepType.AetheryteTeleport, AetheryteId = aetheryte });
         steps.Add(new StepData
         {
             Type = StepType.InteractNpc,
-            NpcDataId = BaseRelicData.GeroltDataId,
-            Position = BaseRelicData.GeroltPosition,
+            NpcDataId = npcDataId,
+            Position = position,
         });
 
         result.Add(new RelicObjective
@@ -245,7 +267,7 @@ public static class BaseRelicHuntGenerator
             Stage = RelicStage.Relic,
             Job = job,
             Id = $"relic-{job}-turnin-seq{activeSeq}",
-            DisplayName = $"{RelicJobs.DisplayName(job)}: {label} (Gerolt, Hyrstmill)",
+            DisplayName = $"{RelicJobs.DisplayName(job)}: {label} ({where})",
             Steps = steps,
             ActiveFromSequence = activeSeq,
             CompleteAtSequence = activeSeq + 1,

@@ -539,10 +539,10 @@ public sealed class MainWindow : Window
         ImGui.TextColored(Grey, "Trade at the Furnace beside Gerolt (Hyrstmill, North Shroud). Mist: Auriana, Revenant's Toll (20 poetics each).");
     }
 
-    // "A Relic Reborn" part 2: the class weapon plus its two Grade III materia. Shown only while
-    // the live relic-quest sequence is actually on that part (obtain 3 / meld 4 / deliver 5), so
-    // it appears the moment the broken weapon has been reported and disappears once Gerolt has
-    // the melded weapon and the Chimera becomes the active step.
+    // "A Relic Reborn" part 2: the class weapon plus its two Grade III materia. Shown while the
+    // live relic-quest sequence is still short of the hand-over (see ClassWeaponSteps.IsWindow),
+    // so it appears as soon as the line is underway and disappears once Gerolt has the melded
+    // weapon and the Chimera becomes the active step.
     private void DrawClassWeaponNextStep()
     {
         var job = BaseRelicState.ActiveRelicJob();

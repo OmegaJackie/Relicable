@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.5.2.1 — "A Relic Reborn" was missing both Rowena steps
+
+### Fixed
+
+- **The base-relic quest table skipped Rowena entirely, so everything from the class
+  weapon through Amdapor Keep was gated two sequences too late.** Reported live: parked
+  on *"Speak with Rowena"* at sequence 6 with the run trying to queue the Chimera.
+
+  "A Relic Reborn" sends you to Rowena at Revenant's Toll twice — she is the one who
+  asks for the Amdapor Glyph, and she is the one who hands you the tome copy Gerolt
+  wants. Neither step was authored, and the table had been closed up over the gap:
+
+  | Journal step | Was | Now |
+  | --- | --- | --- |
+  | Deliver the melded class weapon to Gerolt | 5 | **3** |
+  | The Chimera → Alumina Salts | 6 | **4** |
+  | Deliver the Alumina Salts to Gerolt | 7 | **5** |
+  | Speak with Rowena, Revenant's Toll | *missing* | **6** |
+  | Amdapor Keep → Amdapor Glyph | 8 | **7** |
+  | Deliver the Amdapor Glyph to Rowena | *manual* | **8** |
+  | Deliver the tome copy to Gerolt | 9 | 9 |
+
+  Both Rowena visits are now driven the same way every Gerolt turn-in is (teleport,
+  approach, interact, TextAdvance carries the dialogue), so the line no longer needs a
+  hand from the player between the Chimera and the beastman hunt.
+
+  The tail of the quest — the hunt at 10, the Hydra at 12, the hand-over at 14, the three
+  primals at 15–17, the delivery at 18 — was already correct and is unchanged. That is
+  why this went unnoticed: only the head was shifted, and it re-converged at sequence 9.
+
+- The class-weapon step is **one** journal entry (sequence 3), not three. It was authored
+  as obtain 3 / meld 4 / deliver 5, which is where the shift originated — buying the
+  weapon and melding the two materia are preparation the quest never tracks. The
+  `/relic` panel for it now opens as soon as the line is underway instead of waiting for
+  sequence 3, so there is time to line the weapon up while the timeworn one is fetched.
+
+- **The final turn-in could never fire.** The oil step was gated to exactly sequence 255,
+  and the last journal entry is 19. It is a lower bound now, so it runs under either
+  convention. The Bard quest-path file also carried an auto-generated `Sequence: 255`
+  block that would have walked you to Gerolt without the oil and then waited forever;
+  it is gone, and all ten jobs finish through the same objective.
+
 ## 1.5.2.0 — BossMod Reborn avoidance no longer steals your target
 
 ### Fixed

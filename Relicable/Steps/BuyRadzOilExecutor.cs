@@ -9,7 +9,7 @@ using static ECommons.GenericHelpers;
 
 namespace Relicable.Steps;
 
-// Base-relic FINAL step (quest sequence 255): buy one Radz-at-Han Quenching Oil from Auriana at
+// Base-relic FINAL step (quest sequence 19): buy one Radz-at-Han Quenching Oil from Auriana at
 // Revenant's Toll (15 Allagan Tomestones of Poetics), which the subsequent InteractNpc turns in to
 // Gerolt to finish the il80 relic. Reuses the Mysterious-Map restock's Auriana navigation
 // (NovusData.AurianaDataId / AurianaApproachPosition) and drives her Poetics tomestone exchange via
