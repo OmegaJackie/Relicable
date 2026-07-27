@@ -550,6 +550,43 @@ public static unsafe class GameState
         return RelicWeaponStages.StageOf(itemId);
     }
 
+    // The highest relic tier held ANYWHERE -- hands, armoury weapon slots, or bags -- or None when
+    // no relic weapon is held at all.
+    //
+    // A relic proves its tier by existing, not by being worn. This matters most the moment a stage
+    // FINISHES: every upgrade (and the base relic's final turn-in) hands the new weapon back
+    // UNEQUIPPED, so for the window between receiving it and putting it on, the equipped-slot read
+    // says None -- "no relic progress at all" -- and stage selection re-opens work the character has
+    // just finished, including other jobs' base relics. Reported live: finishing the Artemis Bow on
+    // Bard and having the run immediately pick up Monk's line and buy a second quenching oil.
+    public static RelicStage HighestHeldRelicStage()
+    {
+        var best = RelicStage.None;
+        var im = InventoryManager.Instance();
+        if (im == null)
+            return best;
+        foreach (var bag in ZenithSearchContainers)
+        {
+            var c = im->GetInventoryContainer(bag);
+            // EquippedItems reads without the IsLoaded gate (as EquippedRelicStage does); the
+            // armoury/bag containers keep it, matching every other scan here.
+            if (c == null || (bag != InventoryType.EquippedItems && !c->IsLoaded))
+                continue;
+            // EquippedItems holds every gear slot; only the two weapon slots (0 main, 1 off) matter.
+            var max = bag == InventoryType.EquippedItems ? 2 : c->Size;
+            for (var i = 0; i < max; i++)
+            {
+                var s = c->GetInventorySlot(i);
+                if (s == null || s->ItemId == 0)
+                    continue;
+                var stage = StageOfEquippedItem(s->ItemId);
+                if ((int)stage > (int)best)
+                    best = stage;
+            }
+        }
+        return best;
+    }
+
     // ---- Relic auto-equip (best-effort; ensures the relic is on before a duty) ----
     //
     // True if an item id is one of the known relic weapons (any tier), reusing the same

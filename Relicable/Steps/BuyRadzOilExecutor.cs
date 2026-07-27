@@ -101,6 +101,21 @@ public sealed class BuyRadzOilExecutor : ITaskExecutor
             return ExecutorStatus.Failed;
         }
 
+        // Do not buy what is already owned. The bag check above covers what is on the character;
+        // this covers a RETAINER, whose contents cannot be read unless one is open, so it uses the
+        // cache the plugin builds during its own retainer visits (see PurchaseGuard). Poetics are
+        // farmed, so spending another 15 on a second oil sitting in a retainer's bag is real waste.
+        // Stops instead of withdrawing: pulling the item needs a summoning bell and a retainer trip,
+        // which is the player's call, not something to do silently mid-turn-in.
+        PurchaseGuard.FindHeld(ctx.Config, oil, out _, out var onRetainers, out var where);
+        if (onRetainers > 0)
+        {
+            DebugLog.Warn($"Buy oil: you already have {onRetainers}x Radz-at-Han Quenching Oil on " +
+                          $"{(where.Length > 0 ? where : "a retainer")} -- not buying another. Withdraw it " +
+                          "(or buy one yourself if you would rather), then /relic start.");
+            return ExecutorStatus.Failed;
+        }
+
         // A purchase confirmation ALWAYS follows picking an item, and it is checked FIRST because it
         // opens on top of a shop window that stays open underneath it: the grid and the quantity
         // dialog both still report as open, so driving them first means re-firing "Exchange" at a

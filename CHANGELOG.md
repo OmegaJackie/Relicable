@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.5.2.5 — Finishing a relic sent the run into another job's line
+
+### Fixed
+
+- **Finishing the base relic dropped the engine's sense of progress, and it wandered into
+  another job.** Reported on Bard: the Artemis Bow arrives, and the run immediately shows
+  a **Monk** objective and goes to buy a *second* quenching oil.
+
+  Gerolt hands the finished relic over **unequipped**, and which stage you are on is read
+  off the weapon in your hands. So for the window between receiving it and putting it on,
+  the engine saw no relic at all — which reads as *no relic progress at all*, and
+  selection falls through to whatever sorts first: another job's base relic.
+
+  Three fixes, because one alone would have left the same hole open elsewhere:
+
+  - The line now **equips the relic** as its last step. Every stage transition has this
+    shape — each upgrade hands the new weapon back unequipped too — so this is worth doing
+    at the source, and it is what you want anyway, since the Zenith trade needs the weapon
+    findable.
+  - The progress floor comes from **the highest relic held anywhere** — hands, armoury, or
+    bags — not just an equipped one. It previously looked only for a *Zenith* sitting
+    unequipped, so a bare finished base relic, which is exactly what the line hands you at
+    the end, was invisible to it.
+  - A base-relic objective gated to a quest sequence is now only a candidate once **its own
+    job's quest** has reached that sequence. That gate existed but was only applied while
+    the equipped job was mid-relic; outside that, Monk's oil purchase (gated to sequence
+    19) was eligible with Monk's quest sitting at 0, purely because it was incomplete.
+
+- **Purchases check your retainers first.** Poetics are farmed, so buying a second
+  quenching oil while one sits in a retainer's bag is wasted farming. Retainer contents
+  can't be read unless a retainer is open, so this uses the cache the plugin builds during
+  its own retainer visits — and only in the direction that is safe when slightly stale: it
+  can say "you already have one, don't buy", never "you don't have one". It stops and
+  names the retainer rather than withdrawing, since that needs a summoning bell trip.
+
+### Notes
+
+"Next step: Zenith — 3 Thavnairian Mist" after finishing the relic is correct, not part of
+the bug. Zenith is the next stage, and that trade at the Furnace is still manual.
+
 ## 1.5.2.4 — The purchase confirmation was never answered
 
 ### Fixed

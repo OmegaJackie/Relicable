@@ -188,6 +188,32 @@ public static class BaseRelicState
     public static bool StageResolvedFromQuest()
         => GameState.EquippedRelicStage() == RelicStage.None && ShouldWorkBaseRelic();
 
+    // Is this objective's own quest actually AT the step it is authored for?
+    //
+    // Base-relic objectives are gated to a sequence of "A Relic Reborn", but that gate was only
+    // applied inside the controller's base-relic branch -- the branch that runs when the equipped
+    // job is mid-relic. Outside it, a Relic-stage objective belonging to a DIFFERENT job (whose
+    // quest is at sequence 0, never accepted) was eligible purely because it was incomplete. That is
+    // how a finished Bard could be sent to buy the quenching oil for Monk: the oil objective is
+    // gated to sequence 19, and nothing was checking that Monk's quest had ever reached it.
+    //
+    // So the gate is enforced per objective, against ITS OWN job's live sequence, everywhere:
+    //   * a quest-path step (ActiveAtSequence >= 0) runs only at exactly that sequence;
+    //   * a range-gated objective (ActiveFromSequence > 0) runs only at or past it.
+    // Non-relic stages and un-gated objectives are unaffected.
+    public static bool IsSequenceEligible(RelicObjective o)
+    {
+        if (o.Stage != RelicStage.Relic || o.Job == RelicJob.None)
+            return true;
+        if (o.ActiveAtSequence < 0 && o.ActiveFromSequence <= 0)
+            return true;
+
+        var seq = RelicQuestSequenceFor(o.Job);
+        return o.ActiveAtSequence >= 0
+            ? seq == o.ActiveAtSequence
+            : seq >= o.ActiveFromSequence;
+    }
+
     // Quest-aware completion for a base-relic (Relic-stage) objective: true when the
     // relic quest for its job is finished, or the live sequence has advanced past the
     // objective's part. This lets the controller skip a part the player did manually (or

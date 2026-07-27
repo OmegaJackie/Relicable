@@ -225,6 +225,15 @@ public static class BaseRelicHuntGenerator
             NpcDataId = BaseRelicData.GeroltDataId,
             Position = BaseRelicData.GeroltPosition,
         });
+        // EQUIP the finished relic. Gerolt hands it over UNEQUIPPED, and the engine reads which stage
+        // a character is on from the weapon in their hands -- so until this runs the line looks
+        // finished-but-invisible: no relic equipped reads as no relic progress, and selection falls
+        // through to whatever sorts first, which is another job's base relic. Reported live on Bard:
+        // "just got the Artemis Bow, but it went back to buy another quenching oil and the objective
+        // says Monk". GameState.HighestHeldRelicStage now covers the gap defensively; equipping it
+        // here is the actual fix, and it is what the player wants anyway (Zenith is next, and that
+        // trade wants the weapon in hand to be found).
+        steps.Add(new StepData { Type = StepType.EnsureRelicEquipped });
 
         result.Add(new RelicObjective
         {
