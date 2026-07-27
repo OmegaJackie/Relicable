@@ -20,17 +20,18 @@ Relicable references [ECommons](https://github.com/NightmareXIV/ECommons) as a p
 NuGet package and not a submodule. Clone ECommons **inside** the repository root:
 
 ```bash
-git clone https://github.com/OmegaJackie/RelicAssist
-cd RelicAssist
+git clone https://github.com/OmegaJackie/Relicable
+cd Relicable
 git clone https://github.com/NightmareXIV/ECommons
 ```
 
-The result must look exactly like this. `Relicable.csproj` has a `ProjectReference` to
-`..\ECommons\ECommons\ECommons.csproj`, which resolves relative to `RelicAssist\Relicable\`, so
-ECommons has to sit at the repository root — not beside it:
+The result must look exactly like this. Note the repository root and the plugin project
+are both called `Relicable`, so the csproj sits two levels down. Its `ProjectReference` to
+`..\ECommons\ECommons\ECommons.csproj` resolves relative to that inner folder, so ECommons
+has to sit at the repository root — not beside it:
 
 ```
-RelicAssist/            <- this repository (the repo root)
+Relicable/              <- this repository (the repo root)
   Relicable/            <- the plugin project
     Relicable.csproj
   tools/

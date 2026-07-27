@@ -16,7 +16,7 @@
 #     Dalamud dev distribution and point DALAMUD_HOME at it.
 #
 # NOTE ON THE REPO LAYOUT ASSUMED HERE: the git repository root is the
-# RelicAssist repository root, i.e. the checkout contains Relicable/, docs/, tools/,
+# Relicable repository root, i.e. the checkout contains Relicable/, docs/, tools/,
 # BUILDING.md, and this .github/ folder. ECommons is cloned to ./ECommons so
 # that the ProjectReference ..\ECommons\ECommons\ECommons.csproj resolves.
 # If you instead publish only the Relicable/ folder as the repository, every
@@ -254,7 +254,7 @@ jobs:
             through GitHub issues.
 
             Install via the third-party repository manifest:
-            `https://raw.githubusercontent.com/OmegaJackie/RelicAssist/main/repo.json`
+            `https://raw.githubusercontent.com/OmegaJackie/Relicable/main/repo.json`
             (Dalamud: /xlsettings > Experimental > Custom Plugin Repositories).
             Testing builds must be enabled - this plugin is testing-exclusive.
 
