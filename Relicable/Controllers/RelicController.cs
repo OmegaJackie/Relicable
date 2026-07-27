@@ -480,9 +480,9 @@ public sealed class RelicController
                             .ToList();
                         var generated = relicForJob.Where(o => o.ActiveAtSequence < 0).ToList();
 
-                        // Part 2, the class weapon (sequences 3-5): the quest wants a job-specific
-                        // weapon with two Grade III materia melded onto it. Buying/crafting it and
-                        // melding cannot be automated, so name exactly what is needed rather than
+                        // Part 2, the class weapon (delivered at sequence 3): the quest wants a
+                        // job-specific weapon with two Grade III materia melded onto it. Buying/crafting
+                        // it and melding cannot be automated, so name exactly what is needed rather than
                         // falling through to the generic "not active until sequence N" message --
                         // this is the step the Chimera was previously running ahead of.
                         if (Data.ClassWeaponSteps.IsWindow(liveSeq)

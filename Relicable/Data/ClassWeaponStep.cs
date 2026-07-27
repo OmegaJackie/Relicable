@@ -15,17 +15,19 @@ namespace Relicable.Data;
 // the Limsa Lominsa aetheryte, and an Artisan crafting-list button that queues the weapon and
 // every pre-craft.
 //
-// QUEST SEQUENCES (derived from the journal, and consistent with every value calibrated live in
-// BaseRelicData -- Amdapor Keep at 8, the alumina delivery at 7, the beastman hunt at 10, the
-// Hydra at 12, the weapon hand-over at 14):
-//   seq 0 accept  1 broken weapon  2 deliver broken weapon
-//   seq 3 OBTAIN the class weapon      <- this step
-//   seq 4 AFFIX two Grade III materia  <- this step
-//   seq 5 DELIVER the melded weapon to Gerolt (automated: a Gerolt turn-in objective)
-//   seq 6 the Chimera trial
-// Before this was authored the Chimera (part 3) carried no ActiveFromSequence, so it was
-// eligible from sequence 0 and the run queued the trial the moment the broken weapon was
-// reported -- the "it tried to run chimera first" report.
+// QUEST SEQUENCES (the journal's own entries -- see the full map in BaseRelicData.GlobalParts):
+//   seq 0 accept  1 timeworn weapon  2 deliver the timeworn weapon
+//   seq 3 DELIVER the class weapon melded with two Grade III materia to Gerolt
+//   seq 4 the Chimera trial
+// The journal has ONE entry for this part, not three: "Deliver a materia-enhanced <weapon> to
+// Gerolt". Buying/crafting the weapon and melding the materia are player preparation the quest
+// never tracks separately -- it simply sits at 3 until Gerolt has the finished item. (Until
+// 1.5.2.1 this file claimed a separate obtain=3 / meld=4 / deliver=5, which is where the
+// two-sequence shift in the rest of the head of the table came from.)
+//
+// Because the preparation is untracked and can take a long time, the panel's window opens at
+// sequence 1 -- as soon as the line is genuinely underway -- rather than only at 3, so the
+// weapon and materia can be lined up while the timeworn weapon is being fetched.
 public sealed class ClassWeaponStep
 {
     public RelicJob Job { get; init; }
@@ -50,11 +52,12 @@ public sealed class ClassWeaponStep
 
 public static class ClassWeaponSteps
 {
-    // The relic-quest sequences this step spans (see the ClassWeaponStep header).
-    public const int ObtainSequence = 3;
-    public const int MeldSequence = 4;
-    public const int DeliverSequence = 5;
-    public const int ChimeraSequence = 6;
+    // The relic-quest sequences around this step (see the ClassWeaponStep header).
+    // PrepFromSequence is not a journal entry -- it is the earliest sequence at which showing the
+    // panel is useful (the line is accepted and the timeworn weapon is being fetched).
+    public const int PrepFromSequence = 1;
+    public const int DeliverSequence = 3;
+    public const int ChimeraSequence = 4;
 
     // The market board nearest the Limsa Lominsa Lower Decks aetheryte (the closest board to any
     // teleport destination on the ARR market circuit). Derived from the zone's own layer data
@@ -67,10 +70,11 @@ public static class ClassWeaponSteps
 
     private static readonly Dictionary<RelicJob, ClassWeaponStep?> Cache = new();
 
-    // True while the live relic-quest sequence is inside the class-weapon step (obtain / meld /
-    // deliver). The delivery (5) is included so the panel stays up until Gerolt has it.
+    // True while the melded class weapon is something the player still has to produce: from the
+    // start of the line through the sequence-3 delivery, inclusive. It closes the moment the quest
+    // advances to the Chimera (4), which is the game's own proof that Gerolt has the weapon.
     public static bool IsWindow(int liveSequence)
-        => liveSequence >= ObtainSequence && liveSequence <= DeliverSequence;
+        => liveSequence >= PrepFromSequence && liveSequence <= DeliverSequence;
 
     // The class-weapon step for a job, or null when the job has no base-relic data. Item and
     // recipe ids are resolved once and cached; an unresolved id degrades to 0 (the UI then hides

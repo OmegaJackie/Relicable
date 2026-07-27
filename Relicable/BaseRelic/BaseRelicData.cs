@@ -33,6 +33,29 @@ public static class BaseRelicData
     public const uint GeroltTerritory = 154; // North Shroud (Hyrstmill)
     public static readonly Vector3 GeroltPosition = new(440.726f, -0.937455f, -62.1923f);
 
+    // Rowena (Revenant's Toll, Mor Dhona) owns two journal steps in the middle of the line: the quest
+    // sends you to her at sequence 6 ("for literature surrounding the hero associated with the relic"),
+    // and the Amdapor Glyph is delivered to HER, not to Gerolt, at sequence 8. Neither was authored
+    // before 1.5.2.1, which is what shifted the whole head of the sequence table.
+    //
+    // ENpcResident 1001304 is the Revenant's Toll Rowena specifically: six rows share the name
+    // "Rowena" (one per hub she was added to), and the Level sheet places only this one in
+    // TerritoryType 156 / Map 25 "Mor Dhona" -- the others are Idyllshire (478) and later.
+    //
+    // The approach anchor is her own map coordinate, converted by MapCoords at generation time --
+    // NOT Auriana's verified stall spot, which is ~90 yalms away (Auriana map (22.7, 6.7) -> world
+    // (63.1, -737.8); Rowena (21.9, 5.1) -> world (~21, -819)). They are both "at Rowena's House of
+    // Splendors" but not within streaming reach of each other, so the nearer-sounding reuse would
+    // have parked the run at the wrong stall. The height is deliberately left unset so the navmesh
+    // snaps it (MapCoords leaves world Y at 0), the same as every other authored stop.
+    //
+    // The coordinate matches the one part 4 already carries for the Revenant's Toll stop, and the
+    // wiki's listing for her; the interactor homes on her live object by data id from there.
+    public const uint RowenaDataId = 1001304;
+    public const uint RowenaTerritory = 156; // Mor Dhona (Revenant's Toll)
+    public const float RowenaMapX = 21.9f;
+    public const float RowenaMapY = 5.1f;
+
     // The per-job relic quest title, e.g. "A Relic Reborn (Curtana)". Empty for None.
     public static string RelicQuestNameFor(RelicJob job)
     {
@@ -94,13 +117,42 @@ public static class BaseRelicData
 
     // ---- The ten ordered quest parts (shared structure; per-job specifics in JobRelicData) ----
     //
-    // SEAM: CompletedAtSequence is 0 for every part below, meaning "not yet confirmed".
-    // The exact "A Relic Reborn" quest-sequence value at which each part finishes must
-    // be confirmed on the live client. The checker surfaces the raw live sequence
-    // (PrerequisiteReport.LiveQuestSequence) precisely so these can be read off in-game
-    // and filled in here, after which per-part status becomes exact. Until then the
-    // checker reports parts from the live sequence ordinally and from the positive
-    // item signals below.
+    // THE QUEST-SEQUENCE MAP. Every gate below is a value from this table, which is the quest's
+    // own journal, one entry per sequence, with the accept at 0. It is identical for all ten jobs
+    // (only the weapon / stronghold / tome names differ):
+    //
+    //    0  accept "A Relic Reborn (<weapon>)" from Gerolt (Hyrstmill, North Shroud)
+    //    1  retrieve the timeworn <weapon> from the coffer in your job's beastman stronghold
+    //    2  deliver the timeworn <weapon> to Gerolt
+    //    3  deliver the class weapon melded with two Grade III materia to Gerolt
+    //    4  the Weeping Saint -> "A Relic Reborn: The Chimera" -> obtain Alumina Salts
+    //    5  deliver the Alumina Salts to Gerolt
+    //    6  SPEAK WITH ROWENA at Revenant's Toll (Mor Dhona)
+    //    7  obtain an Amdapor Glyph by clearing Amdapor Keep
+    //    8  deliver the Amdapor Glyph to ROWENA
+    //    9  deliver the copy of the hero's tome to Gerolt
+    //   10  slay 24 beastmen (8 each of three types) with the unfinished relic equipped
+    //   11  report the hunt to Gerolt
+    //   12  Halatali -> "A Relic Reborn: The Hydra" with the unfinished relic equipped
+    //   13  report the Hydra to Gerolt
+    //   14  hand the unfinished <weapon> over to Gerolt
+    //   15  Ifrit, The Bowl of Embers (Hard)   -> White-Hot Ember
+    //   16  Garuda, The Howling Eye (Hard)     -> Howling Gale
+    //   17  Titan, The Navel (Hard)            -> Hyperfused Ore
+    //   18  deliver the three drops to Gerolt
+    //   19  buy a Radz-at-Han Quenching Oil and deliver it to Gerolt (the final turn-in)
+    //
+    // CORRECTED in 1.5.2.1. The previous table had no entries for the two ROWENA steps (6 and 8),
+    // so everything from the class weapon through the Amdapor Glyph was authored two sequences too
+    // late: the Chimera sat at 6 (which is actually "speak with Rowena"), the Alumina Salts
+    // hand-over at 7, Amdapor Keep at 8. Reported live: parked on "Speak with Rowena" at sequence 6
+    // with the run trying to queue the Chimera. The tail (10 hunt, 12 Hydra, 14 hand-over, 15-17
+    // primals, 18 delivery) was already right and is unchanged -- which is exactly why the error
+    // was invisible: only the head was shifted, and it re-converged at 9.
+    //
+    // The two "calibrated live" notes that produced the old head (the Chimera reading 7, Amdapor
+    // Keep reading 8) are wrong and have been removed; they cannot both hold with a hunt verified
+    // at 10, because 4..10 has room for exactly the six journal entries listed above.
     public static readonly IReadOnlyList<QuestPart> GlobalParts = new[]
     {
         new QuestPart
@@ -108,9 +160,8 @@ public static class BaseRelicData
             Part = 1, Name = "Broken Weapon",
             Summary = "Recover the broken quest weapon from your job's beastman stronghold, then report to Gerolt.",
             // The generated start block recovers the weapon at sequence 1 and reports it at 2, so the
-            // part is done once the quest advances past the report (seq >= 3). Derived, like the part
-            // 2/3 windows below, from the journal order the live calibrations already confirm (the
-            // alumina delivery at 7, Amdapor Keep at 8, the beastman hunt at 10, the Hydra at 12).
+            // part is done once the quest advances past the report (seq >= 3, where it starts asking
+            // for the melded class weapon).
             CompletedAtSequence = 3,
         },
         new QuestPart
@@ -119,11 +170,12 @@ public static class BaseRelicData
             Summary = "Obtain the class weapon and meld two Grade III materia onto it (requires Waking the Spirit), " +
                       "then deliver it to Gerolt. Buying and melding cannot be automated, so the step is surfaced " +
                       "as '<Job>: <Weapon> (<Materia> x2)' with market-board search and an Artisan crafting list.",
-            // The three journal steps of this part: obtain the weapon (seq 3), affix the two materia
-            // (4), deliver the melded weapon to Gerolt (5, a generated Gerolt turn-in). Complete once
-            // the quest reaches the Chimera (6). See Data/ClassWeaponStep for the full derivation.
+            // ONE journal step, not three: "Deliver a materia-enhanced <weapon> to Gerolt" is sequence 3.
+            // Obtaining the weapon and melding the materia are player preparation the journal never
+            // tracks -- the quest sits at 3 until Gerolt has the finished item -- so this is a [3, 4)
+            // window, not the [3, 6) the old table used. See Data/ClassWeaponStep.
             ActiveFromSequence = 3,
-            CompletedAtSequence = 6,
+            CompletedAtSequence = 4,
         },
         new QuestPart
         {
@@ -131,44 +183,39 @@ public static class BaseRelicData
             Summary = "Defeat the Dhorme Chimera in the trial 'A Relic Reborn: The Chimera' and obtain Alumina Salts.",
             HaveItemName = "Alumina Salts",
             // The CFC name carries the ": The Chimera" suffix (the bare "A Relic Reborn" did not
-            // resolve). Run via AutoDuty. CALIBRATED from a live /relic prereq: the quest reads
-            // sequence 7 right after the Chimera, so the part is complete at seq >= 7.
+            // resolve). Run via AutoDuty.
             DutyName = "A Relic Reborn: The Chimera",
-            // ActiveFromSequence 6 is the FIX for "after handing over the broken weapon it tried to
-            // run the Chimera first": with no lower bound the trial's window was [0, 7), so it was
-            // eligible from the moment the quest was accepted and the engine queued it while the
-            // quest was still asking for the melded class weapon (part 2, sequences 3-5). The
-            // Chimera is the journal step right after the melded-weapon delivery, so it runs AT
-            // sequence 6 and completes when the quest advances to 7 (calibrated live: the quest
-            // reads 7 right after the Chimera).
-            ActiveFromSequence = 6,
-            CompletedAtSequence = 7,
+            // The trial is journal step 4, the entry right after the melded class weapon is handed
+            // over: it runs AT sequence 4 and the quest advances to 5 (deliver the Alumina Salts to
+            // Gerolt) on the clear. The lower bound is what keeps it from being queued while the
+            // quest is still asking for the class weapon -- with no bound its window was [0, N) and
+            // the engine queued it the moment the quest was accepted.
+            ActiveFromSequence = 4,
+            CompletedAtSequence = 5,
             Location = new MapStop("A Relic Reborn (Chimera) entrance, the Weeping Saint", CoerthasCentralHighlands, 32.1f, 7.2f, 2.1f),
             Items = new[] { new MaterialReq("Alumina Salts", 1, MaterialSource.Trial, "A Relic Reborn: The Chimera (8-man trial)") },
         },
         new QuestPart
         {
             Part = 4, Name = "Complete Amdapor Keep",
-            Summary = "Clear Amdapor Keep (normal) for the Amdapor Glyph, trade it to Rowena at Revenant's Toll, and buy the Mor Dhona consumables. Then follow the questline as usual.",
+            Summary = "Clear Amdapor Keep (normal) for the Amdapor Glyph, deliver it to Rowena at Revenant's Toll, and buy the Mor Dhona consumables. Then follow the questline as usual.",
             HaveItemName = "Amdapor Glyph", ItemIsKeyItem = true,
-            // The Amdapor Keep clear is run via AutoDuty. Gated to sequence 8: after the Chimera (part 3,
-            // done at seq 7) the quest parks at seq 7 to DELIVER the Alumina Salts to Gerolt (the seq-7
-            // between-trial turn-in in BaseRelicHuntGenerator), advancing to seq 8. Amdapor Keep must NOT
-            // run before that hand-over -- reported live: "after the Chimera it tried to bring me into
-            // Amdapor Keep, but you have to hand over the Alumina Salts to Gerolt first". Without an
-            // ActiveFromSequence the dungeon (ActiveFrom 0) was eligible the instant the Chimera cleared.
-            // CALIBRATED: the quest reads sequence 8 right after the Amdapor Keep clear (Amdapor Glyph in
-            // hand), so the dungeon runs AT seq 8 and the part is complete once the quest advances past it
-            // (seq >= 9, the post-clear Amdapor Glyph trade to Rowena). ActiveFromSequence 8 pairs with
-            // CompleteAtSequence 9 to form the [8, 9) run window (the in-session _relicRan flag prevents a
-            // re-clear at seq 8 while the glyph is held before the trade).
-            // Post-clear tail: trade the Amdapor Glyph to Rowena (advances to seq 9), then report to
-            // Gerolt (the seq-9 between-trial turn-in, advancing to seq 10 where the beastman hunt begins).
-            // The Gerolt report IS now automated (BaseRelicHuntGenerator seq-9 turn-in); the Rowena glyph
-            // trade and the Auriana vendor buys are still manual SEAMs (Rowena/Auriana shop ids needed).
+            // The dungeon is journal step 7, and it is Rowena who asks for the glyph: the quest reaches
+            // 7 only after speaking to her at Revenant's Toll (6). So the run window is [7, 8) -- the
+            // clear advances the quest to 8, "deliver the Amdapor Glyph to Rowena". The in-session
+            // _relicRan flag prevents a re-clear at seq 7 while the glyph is already held.
+            //
+            // Amdapor Keep must NOT run before the Alumina Salts hand-over (5) or the Rowena visit (6)
+            // -- reported live: "after the Chimera it tried to bring me into Amdapor Keep, but you have
+            // to hand over the Alumina Salts to Gerolt first". Both intervening steps are now driven
+            // (BaseRelicHuntGenerator), so the lower bound holds the dungeon until they are done.
+            //
+            // Post-clear tail, all automated: deliver the glyph to Rowena (8 -> 9), then deliver the
+            // tome copy she gives you to Gerolt (9 -> 10, where the beastman hunt begins). The Auriana
+            // vendor buys remain a manual seam except the final oil (BuyRadzOilExecutor).
             DutyName = "Amdapor Keep",
-            ActiveFromSequence = 8,
-            CompletedAtSequence = 9,
+            ActiveFromSequence = 7,
+            CompletedAtSequence = 8,
             Location = new MapStop("Rowena / Auriana, Revenant's Toll", MorDhona, 21.9f, 5.0f, 0.5f),
             Items = new[]
             {
@@ -237,6 +284,9 @@ public static class BaseRelicData
         {
             Part = 10, Name = "Radz-at-Han Quenching Oil",
             Summary = "Buy a second Radz-at-Han Quenching Oil from Auriana and turn it in to Gerolt for the finished relic.",
+            // The final journal step (19). No CompletedAtSequence: the quest does not advance past this
+            // one, it COMPLETES, so the oil objective keys on the quest being done (see AddOilTurnIn).
+            ActiveFromSequence = 19,
             Location = new MapStop("Auriana, Revenant's Toll (then Gerolt, Hyrstmill)", MorDhona, 21.9f, 5.0f, 0.5f),
             Items = new[] { new MaterialReq("Radz-at-Han Quenching Oil", 1, MaterialSource.Vendor, "Auriana, Mor Dhona (15 Poetics)") },
         },
