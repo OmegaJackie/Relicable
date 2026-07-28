@@ -34,6 +34,18 @@ internal static class WorldObject
     // quest coffer reads targetable from far away (or while airborne) is unverified, and
     // refusing to return one would strand the caller with nothing to walk toward. The
     // caller decides what to do with it (see InteractObjectExecutor's spent-object logic).
+    //
+    // TARGETABLE OUTRANKS DISTANCE, and that is load-bearing for the relic line. Nine of the
+    // ten "A Relic Reborn" broken-weapon coffers share a beastman stronghold with another
+    // job's -- Zahar'ak (Paladin + Monk), U'Ghamaro (Warrior + Black Mage + White Mage),
+    // Natalan (Dragoon + Bard), Sapsa (Ninja + Scholar) -- every one of them is named
+    // "Treasure Coffer", and the generated quest path authors no DataId, so nearest-by-name
+    // is a coin flip between two coffers 0-46y apart (Warrior/Black Mage and Ninja/Scholar
+    // are authored at IDENTICAL coordinates, so distance cannot separate them at all). Only
+    // the coffer belonging to the quest step you are actually on is targetable, which makes
+    // targetability the one discriminator that always tells them apart. Ranking it above
+    // distance is what stops a Monk run walking to the Paladin coffer and firing at an
+    // untargetable object until the step times out.
     public static IGameObject? FindNearest(string? name, uint dataId, float radius, out bool targetable)
     {
         targetable = false;
@@ -55,9 +67,23 @@ internal static class WorldObject
             if (d > r2)
                 continue;
 
-            // A DataId hit outranks ANY name hit, at any distance: ids do not localize and
-            // cannot collide, names do both. Within a class, nearest wins.
-            var rank = byId ? d : d + 1_000_000f;
+            // Rank, most significant first:
+            //   1. targetable -- the LIVE "this is the object your quest step wants" flag, and
+            //      the only thing that separates two same-named coffers (see above). It leads
+            //      because every DataId in the relic data is offline-derived and explicitly
+            //      unverified, whereas targetability is read from the game;
+            //   2. a DataId hit, at any distance -- ids do not localize and cannot collide,
+            //      names do both, so an authored id is the tie-breaker among live candidates;
+            //   3. nearest.
+            // A non-targetable match is still ranked (never filtered), so when NOTHING nearby
+            // is targetable -- the object has not streamed in, or the quest is not on this step
+            // yet -- this degrades exactly to the previous id-then-distance behaviour and the
+            // caller still has something to walk toward.
+            var rank = d;
+            if (!byId)
+                rank += 1_000_000f;
+            if (!o.IsTargetable)
+                rank += 2_000_000f;
             if (rank < bestRank)
             {
                 bestRank = rank;

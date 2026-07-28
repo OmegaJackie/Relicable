@@ -75,6 +75,7 @@ public sealed class InteractObjectExecutor : ITaskExecutor
     private bool _landing;         // sticky landing commitment (NpcInteractor.cs:45)
     private bool _fired;           // we have issued at least one InteractWithObject
     private bool _everTargetable;  // the object read targetable at some point (see the spent check)
+    private bool _warnedUntargetable; // the "in range but nothing targetable" warning has been said once
     private long _navIdleSince;    // when vnavmesh last went idle (0 = it is moving/pathing)
     private Vector3? _resolvedAnchor; // a map-derived (Y=0) anchor snapped to a landable floor, cached
 
@@ -92,6 +93,7 @@ public sealed class InteractObjectExecutor : ITaskExecutor
         _landing = false;
         _fired = false;
         _everTargetable = false;
+        _warnedUntargetable = false;
         _navIdleSince = 0;
         _resolvedAnchor = null;
         // Force the next rotation-mode dispatch to actually re-send. The combat backend is
@@ -330,6 +332,21 @@ public sealed class InteractObjectExecutor : ITaskExecutor
             if (bailing)
                 DebugLog.Info($"InteractObject: vnav stopped {horiz:0.0}y short (its best effort); interacting anyway");
             DebugLog.Info($"InteractObject: interacting with '{obj.Name.TextValue}' ({obj.BaseId}), targetable {targetable}");
+            // Standing ON it, grounded, and it still reads untargetable: InteractWithObject is a
+            // no-op against such an object, so this fire cannot land. Say why once, because the
+            // usual cause is specific and otherwise invisible -- most beastman strongholds hold
+            // TWO jobs' identically-named "Treasure Coffer"s, and only the one belonging to the
+            // quest step you are on is targetable. The finder now prefers a targetable match
+            // (WorldObject.FindNearest), so reaching here means none is loaded: either this job's
+            // coffer has not streamed in yet, or the quest is not actually at that step.
+            if (!targetable && !_everTargetable && !_warnedUntargetable)
+            {
+                _warnedUntargetable = true;
+                DebugLog.Warn($"InteractObject: '{obj.Name.TextValue}' ({obj.BaseId}) is not targetable from " +
+                              $"{horiz:0.0}y, and no targetable match is loaded nearby. If this stronghold holds " +
+                              "another job's coffer too, that is probably the one we found -- check that the relic " +
+                              "quest is really at the recover-the-broken-weapon step.");
+            }
             WorldObject.Interact(obj);
         }
         return ExecutorStatus.InProgress;

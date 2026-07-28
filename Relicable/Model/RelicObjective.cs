@@ -21,6 +21,9 @@ public enum CompletionKind
     AtmaUpgraded,   // the Zenith -> Atma enhancement is done: the equipped weapon has reached the Atma tier
     AnimusUpgraded, // the Atma -> Animus enhancement is done: the equipped weapon has reached the Animus tier
     NexusUpgraded,  // the Novus -> Nexus upgrade is done: the equipped weapon has reached the Nexus tier
+    ZenithTraded,   // the Furnace trade is done: the weapon in the hands is a "<base> Zenith" form. Read off
+                    // the EQUIPPED weapon, not "no bare relic held", so an alt job's parked base relic in the
+                    // armoury neither blocks it nor completes it early while the traded weapon sits unequipped
     MahatmaGauge,   // Zeta: all 12 Mahatma awakened on the equipped Braves weapon (GameState.IsZetaFarmComplete)
     RelicNoteAdvanced, // Animus book auto-advance: the active RelicNote is no longer the finished Book (a new book was bought; a repeat relic WRAPS from the last book back to book 1, so "different", not "greater")
     AllStepsDone,   // objective is purely procedural

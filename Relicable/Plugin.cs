@@ -176,6 +176,8 @@ public sealed class Plugin : IDalamudPlugin
             new AtmaUpgradeExecutor(),
             new AnimusUpgradeExecutor(),
             new NexusUpgradeExecutor(),
+            new AcquireZenithMistExecutor(),
+            new ZenithTradeExecutor(),
             new BravesReportExecutor(),
             new BuyRelicBookExecutor(),
             new BuyRadzOilExecutor(),

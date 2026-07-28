@@ -740,26 +740,50 @@ public sealed class RelicController
             // delegation ends and this gate hands the upgrade objective to the engine.
             if (completedStage == RelicStage.Relic && !BaseRelicState.ShouldWorkBaseRelic())
             {
+                // Zenith gate: the equipped weapon is a finished bare base relic, so the ONLY valid
+                // work is its Furnace trade -- and that is automated now (buy the Thavnairian Mist
+                // at Auriana if it is not already held, then trade at the Furnace beside Gerolt),
+                // so select that objective rather than stopping with guidance. It is authored at
+                // the Atma stage because Auto filters the pool to stages ABOVE the completed one
+                // and a bare base relic already reads RelicStage.Relic; its ZenithTraded priority
+                // sorts it ahead of the 12 atma farms, which cannot progress until it is done.
                 if (BaseRelicState.EquippedNeedsZenith())
                 {
-                    DebugLog.Warn("Base relic done, but the equipped weapon has not been Zenith-upgraded yet. " +
-                                  "Trade it + 3x Thavnairian Mist at the Furnace beside Gerolt (Hyrstmill, North " +
-                                  "Shroud) first -- see the main window's Zenith guidance -- then /relic start.");
-                    Stop();
-                    return;
-                }
-                var atmaPool = pool.Where(o => o.Stage == RelicStage.Atma).ToList();
-                if (atmaPool.Count > 0)
-                {
-                    pool = atmaPool;
+                    var zenith = pool.FirstOrDefault(o => o.Completion.Kind == CompletionKind.ZenithTraded);
+                    if (zenith != null)
+                    {
+                        pool = new List<RelicObjective> { zenith };
+                    }
+                    else
+                    {
+                        DebugLog.Warn("Base relic done, but the equipped weapon has not been Zenith-upgraded yet, " +
+                                      "and the zenith-upgrade objective is not loadable (run /relic reload). Trade " +
+                                      "it + 3x Thavnairian Mist at the Furnace beside Gerolt (Hyrstmill, North " +
+                                      "Shroud) -- see the main window's Zenith guidance -- then /relic start.");
+                        Stop();
+                        return;
+                    }
                 }
                 else
                 {
-                    DebugLog.Warn("Zenith equipped but no Atma-stage objective is loadable (the atma farm/upgrade " +
-                                  "data files are missing?). Run /relic reload, or farm the 12 atmas and perform " +
-                                  "the 'Relic Weapon Zenith Enhancement' at Jalzahn (Hyrstmill) manually.");
-                    Stop();
-                    return;
+                    // Zenith already done: the normal Atma-stage work (the 12-zone FATE farm, then
+                    // the Zenith -> Atma enhancement at Jalzahn). The zenith-upgrade objective is
+                    // dropped here so a completed trade cannot re-select it.
+                    var atmaPool = pool
+                        .Where(o => o.Stage == RelicStage.Atma && o.Completion.Kind != CompletionKind.ZenithTraded)
+                        .ToList();
+                    if (atmaPool.Count > 0)
+                    {
+                        pool = atmaPool;
+                    }
+                    else
+                    {
+                        DebugLog.Warn("Zenith equipped but no Atma-stage objective is loadable (the atma farm/upgrade " +
+                                      "data files are missing?). Run /relic reload, or farm the 12 atmas and perform " +
+                                      "the 'Relic Weapon Zenith Enhancement' at Jalzahn (Hyrstmill) manually.");
+                        Stop();
+                        return;
+                    }
                 }
             }
 
@@ -1161,6 +1185,9 @@ public sealed class RelicController
         CompletionKind.LeveSlot => 1,
         CompletionKind.DungeonSlot => 2,
         CompletionKind.FateSlot => 3,
+        // The Zenith trade gates the whole Atma stage (the atma FATE farm needs the Zenith weapon
+        // equipped), so it sorts ahead of the 12 atma farms (ItemCount = 4) it shares a stage with.
+        CompletionKind.ZenithTraded => 3,
         CompletionKind.AtmaUpgraded => 5, // after the atma farms (ItemCount = 4)
         // After all book slots (0..3): the Atma -> Animus enhancement runs once the books are done.
         CompletionKind.AnimusUpgraded => 5,
@@ -1403,6 +1430,10 @@ public sealed class RelicController
             // The Novus -> Nexus upgrade is done once the equipped weapon proves the Nexus tier
             // (job-agnostic, read from the weapon rather than a per-job item id).
             CompletionKind.NexusUpgraded => GameState.EquippedRelicStage() >= RelicStage.Nexus,
+            // The Furnace trade is done once a "<base> Zenith" weapon is in the hands. The base and
+            // Zenith forms are both RelicStage.Relic (the enum has no Zenith tier), so the stage read
+            // cannot tell them apart -- the item id is the only thing that can.
+            CompletionKind.ZenithTraded => Data.RelicWeaponStages.IsZenithWeapon(GameState.EquippedRelicItemId()),
             CompletionKind.MahatmaGauge => GameState.IsZetaFarmComplete(),
             // Animus book auto-advance: done once the active book is no longer the finished one. Uses
             // "different", not "greater", because a repeat-relic restart wraps from the last book (9)

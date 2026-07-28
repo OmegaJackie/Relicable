@@ -35,6 +35,11 @@ internal sealed class NpcInteractor
     // Only mount/fly to close a gap longer than this; short hops stay on foot so a brief takeoff
     // cannot restart a land/fly oscillation on top of the NPC.
     private const float FlyMinDistance = 30.0f;
+    // Close enough HORIZONTALLY to a map-derived (height-guessed) approach anchor to stop moving
+    // and let the NPC stream in, rather than commit to the guessed floor. Generous, because the
+    // point is only to be inside streaming range with the right XZ -- see the multi-storey note
+    // in the Locating phase.
+    private const float AnchorHorizontalArrive = 15.0f;
     private const long OverallTimeoutMs = 60000;
     private const long InteractCooldownMs = 600;
 
@@ -107,15 +112,41 @@ internal sealed class NpcInteractor
                     // Snap it through the high-Y floor probe once; authored positions
                     // with a real Y are used as-is.
                     var ap = rawAp;
+                    var snappedFromMap = false;
                     if (rawAp.Y == 0f)
                     {
                         _resolvedApproach ??= ctx.Navmesh.FloorForMapPoint(rawAp);
                         if (_resolvedApproach is { } snapped)
+                        {
                             ap = snapped;
+                            snappedFromMap = true;
+                        }
                     }
                     var meLoc = Plugin.ObjectTable.LocalPlayer?.Position ?? ap;
                     var apDist = Vector3.Distance(meLoc, ap);
                     _nearApproach |= apDist <= 6.0f;
+
+                    // A map coordinate has no HEIGHT, and both floor probes cast DOWNWARD from
+                    // high above -- so inside a multi-storey building they resolve to the TOP
+                    // floor, not the one the NPC stands on. Rowena's House of Splendors is the
+                    // case that showed it: the run climbed to the second storey, stood there
+                    // until she streamed in, then walked back down to her. The climb is pure
+                    // waste, because the anchor's only job is to get the NPC to stream in, and
+                    // its XZ is already right -- only its Y is a guess.
+                    //
+                    // So once we are at the anchor HORIZONTALLY, stop and let her load instead of
+                    // committing to the guessed floor. Approaching then homes on her live
+                    // position, which is authoritative. Gated on a map-derived Y: an authored
+                    // real-Y position is a deliberate spot and is still walked onto exactly.
+                    // If the NPC never streams in, the existing timeout still fails honestly.
+                    var apHoriz = Vector2.Distance(new(meLoc.X, meLoc.Z), new(ap.X, ap.Z));
+                    if (snappedFromMap && apHoriz <= AnchorHorizontalArrive)
+                    {
+                        _nearApproach = true;
+                        ctx.Navmesh.Stop();
+                        break;
+                    }
+
                     Combat.Mount.EnsureMounted(ctx, apDist);
                     ctx.Navmesh.MoveCloseTo(ap, Steps.Flight.Allowed(ctx), 3.0f);
                 }

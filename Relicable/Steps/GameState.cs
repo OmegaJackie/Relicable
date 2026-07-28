@@ -109,10 +109,27 @@ public static unsafe class GameState
 
     // ---- Inventory (Atma, Sphere Scroll, materia) ----
 
+    // How many of an item the character holds across the bags, the armoury chest, and the
+    // equipped slots.
+    //
+    // BOTH QUALITIES ARE COUNTED, and that is the whole point of the two calls. The game's
+    // GetInventoryItemCount signature is
+    //     GetInventoryItemCount(itemId, isHq = false, checkEquipped = true, checkArmory = true, ...)
+    // so the defaults already cover the armoury and the equipped slots -- but isHq is a MATCH,
+    // not a minimum: the default counts NQ copies ONLY and silently ignores every HQ one. Most
+    // items this plugin counts (atma, materia, Alexandrite, the maps, the quenching oil, the
+    // Thavnairian Mist, the relic weapons themselves) have no HQ form, so the miss was invisible
+    // -- until the "A Relic Reborn" part-2 check, whose CLASS WEAPON and craft materials are
+    // routinely bought or crafted HQ. Those read as "you have 0 / 1" while sitting in the bag,
+    // which is the reported "the inventory check does not see the weapon in your inventory or
+    // armoury chest". NQ and HQ are disjoint, so summing them cannot double-count.
     public static int InventoryCount(uint itemId)
     {
         var im = InventoryManager.Instance();
-        return im == null ? 0 : im->GetInventoryItemCount(itemId);
+        if (im == null)
+            return 0;
+        return im->GetInventoryItemCount(itemId)
+               + im->GetInventoryItemCount(itemId, isHq: true);
     }
 
     // Searches the market board for an item by NAME -- exactly as typing the name into
@@ -594,18 +611,37 @@ public static unsafe class GameState
     public static bool IsRelicWeaponId(uint itemId)
         => itemId != 0 && StageOfEquippedItem(itemId) != RelicStage.None;
 
-    // Containers an unequipped relic weapon can sit in: the main-hand armoury slot (where a
-    // weapon lands when swapped off) first, then the four bags.
+    // Containers an unequipped relic weapon can sit in: the armoury weapon slots (where a weapon
+    // lands when swapped off) first, then the four bags. ArmoryOffHand is included for the
+    // Paladin's Holy Shield, which is a relic in its own right and lives in that container.
     private static readonly InventoryType[] RelicSearchContainers =
     {
-        InventoryType.ArmoryMainHand,
+        InventoryType.ArmoryMainHand, InventoryType.ArmoryOffHand,
         InventoryType.Inventory1, InventoryType.Inventory2,
         InventoryType.Inventory3, InventoryType.Inventory4,
     };
 
-    // Find the first known relic weapon that is NOT currently equipped (sitting in the armoury
-    // or a bag), so the caller can equip it before a duty. False if none is found.
+    // Find a known relic weapon that is NOT currently equipped (sitting in the armoury chest or a
+    // bag), so the caller can equip it before a duty or the beastman hunt. False if none is found.
+    //
+    // THE CURRENT JOB'S RELIC WINS, and that is the whole reason this is not a plain first-match.
+    // A relic can only be equipped by the job it belongs to, and the game refuses the move
+    // silently -- no error, nothing in the log. So on a character with more than one relic in
+    // flight (or one finished relic parked in the armoury while a second job is levelling its
+    // own), scanning "the first relic weapon found" would keep handing the equip another job's
+    // weapon, the move would be ignored, and the hunt would run with an empty main hand while the
+    // kills quietly failed to credit. Scanning the current job's weapons first fixes that; the
+    // job-agnostic pass is kept as a fallback for the ids that carry no job mapping (the il125
+    // Braves and il135 Zeta finals) and for an unrecognized class.
     public static bool TryFindRelicInBags(out InventoryType container, out ushort slot)
+    {
+        var job = RelicJobs.FromClassJobId(ActiveClassJobId());
+        return TryFindRelicInBags(job, out container, out slot)
+               || (job != RelicJob.None && TryFindRelicInBags(RelicJob.None, out container, out slot));
+    }
+
+    // requiredJob None = accept any relic weapon; otherwise only ones that job can equip.
+    private static bool TryFindRelicInBags(RelicJob requiredJob, out InventoryType container, out ushort slot)
     {
         container = default;
         slot = 0;
@@ -622,12 +658,13 @@ public static unsafe class GameState
                 var s = c->GetInventorySlot(i);
                 if (s == null || s->ItemId == 0)
                     continue;
-                if (IsRelicWeaponId(s->ItemId))
-                {
-                    container = bag;
-                    slot = (ushort)i;
-                    return true;
-                }
+                if (!IsRelicWeaponId(s->ItemId))
+                    continue;
+                if (requiredJob != RelicJob.None && RelicWeaponStages.JobOf(s->ItemId) != requiredJob)
+                    continue;
+                container = bag;
+                slot = (ushort)i;
+                return true;
             }
         }
         return false;
@@ -666,6 +703,28 @@ public static unsafe class GameState
                 return true;
         }
         return false;
+    }
+
+    // The bare base relics currently IN THE HANDS, as (equip slot, item id) -- 0 = main hand,
+    // 1 = off hand. This is the exact set the Zenith step has to trade: every solo main hand is
+    // one 3-mist trade, and the Paladin's Curtana + Holy Shield are two separate trades (2 + 1)
+    // that must BOTH happen, so the step works from the pair rather than from a single weapon.
+    public static List<(ushort Slot, uint ItemId)> EquippedZenithPendingWeapons()
+    {
+        var found = new List<(ushort, uint)>();
+        var im = InventoryManager.Instance();
+        if (im == null)
+            return found;
+        var c = im->GetInventoryContainer(InventoryType.EquippedItems);
+        if (c == null)
+            return found;
+        for (ushort i = 0; i <= 1; i++) // 0 = main hand, 1 = off hand (Holy Shield)
+        {
+            var slot = c->GetInventorySlot(i);
+            if (slot != null && RelicWeaponStages.IsBareBaseRelic(slot->ItemId))
+                found.Add((i, slot->ItemId));
+        }
+        return found;
     }
 
     // Every FINISHED bare base relic (the Zenith-pending form; RelicWeaponStages.IsBareBaseRelic)

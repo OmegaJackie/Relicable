@@ -536,7 +536,9 @@ public sealed class MainWindow : Window
             : $"Next step (Zenith): trade {(need > 0 ? need : 3)}x Thavnairian Mist ({have} held)");
         if (pending.Count > 0)
             Ui.Tooltip($"Waiting on the Furnace: {BaseRelicState.DescribeZenithPending(pending)}.\nEquipped or in the armoury chest both count.");
-        ImGui.TextColored(Grey, "Trade at the Furnace beside Gerolt (Hyrstmill, North Shroud). Mist: Auriana, Revenant's Toll (20 poetics each).");
+        ImGui.TextColored(Grey, have >= need && need > 0
+            ? "Start goes straight to the Furnace beside Gerolt (Hyrstmill, North Shroud) and trades it."
+            : "Start buys the mist from Auriana (Revenant's Toll, 20 poetics each), then trades at the Furnace beside Gerolt (Hyrstmill).");
     }
 
     // "A Relic Reborn" part 2: the class weapon plus its two Grade III materia. Shown while the

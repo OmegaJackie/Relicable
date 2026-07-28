@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.5.3.1 — The run parked after the beastman hunt
+
+### Fixed
+
+- **The relic now comes off before the post-hunt report to Gerolt.** The beastman hunt
+  necessarily ends with the unfinished relic in your hands — its kills only credit while it
+  is equipped — and the report that follows is a hand-over, not just a conversation. A
+  hand-over never lists an equipped item, so the turn-in had nothing to offer and the run sat
+  there. The weapon is taken off for that turn-in now, put straight back if Gerolt does not
+  take it, and the Hydra re-equips it either way.
+
+## 1.5.3.0 — The Zenith step runs itself
+
+### Added
+
+- **Zenith is automated.** Finishing the base relic used to stop the run with "go trade it
+  at the Furnace yourself". Now Start does it: if you are short on **Thavnairian Mist** it
+  goes to Auriana at Revenant's Toll and buys the shortfall, and if you already have it, it
+  skips Mor Dhona entirely and flies straight to the **Furnace beside Gerolt** in Hyrstmill.
+  The traded weapon is equipped afterwards, so the run continues into the Atma stage without
+  stopping.
+
+  Details that matter:
+
+  - **One trade per weapon.** Every solo main hand costs 3 mists, but Paladin is two
+    separate entries (Curtana + 2, Holy Shield + 1) and both have to happen.
+  - **Your retainers are checked before buying.** Poetics are farmed, so if a retainer is
+    holding mist the run says which one instead of spending on a second set.
+  - **Nothing is ever clicked blind.** The Furnace's window is driven by positive
+    identification only: a list entry by the weapon's own name, a shop row by the item id
+    it hands back. If nothing matches, the step stops with the window's real wording logged
+    rather than picking something arbitrary.
+
+### Fixed
+
+- **The beastman hunt could run with an empty main hand.** The auto-equip took the first
+  relic weapon it found in the armoury, of any job. A relic can only be equipped by its own
+  job and the game refuses the swap **silently**, so on a character with a second relic
+  parked in the armoury the equip did nothing, the hunt ran unarmed, and the kills never
+  credited. It now looks for the current job's relic first, and searches the off-hand
+  armoury slot too (the Paladin's Holy Shield lives there).
+
+- **The wrong job's Treasure Coffer.** Nine of the ten "A Relic Reborn" broken-weapon
+  coffers share a stronghold with another job's — Zahar'ak has Paladin and Monk, U'Ghamaro
+  has Warrior, Black Mage and White Mage, Natalan has Dragoon and Bard, Sapsa has Ninja and
+  Scholar — and every one of them is named "Treasure Coffer". The finder took the nearest
+  match, which for Warrior/Black Mage and Ninja/Scholar is a coin flip (they are authored at
+  identical coordinates). Reported on Monk: it walked to the Paladin coffer and hammered an
+  untargetable object until the step timed out. Only the coffer belonging to the quest step
+  you are on is targetable, so that is now what the finder prefers.
+
+- **Items in your inventory did not count if they were HQ.** The counter asked the game for
+  NQ copies only. Most things the plugin counts have no HQ form so it never showed, but the
+  "A Relic Reborn" class weapon is routinely bought or crafted HQ — and read as "0 / 1"
+  while sitting in the bag. Both qualities are counted now.
+
+- **The run climbed to the second storey to reach Rowena.** Her approach anchor is a map
+  coordinate, which has no height, and the floor probe casts downward from above — so inside
+  Rowena's House of Splendors it resolved to the upper floor. The run went up, waited for her
+  to load, then walked back down. It now stops once it is at the anchor horizontally and lets
+  her stream in, then goes to where she actually is.
+
 ## 1.5.2.5 — Finishing a relic sent the run into another job's line
 
 ### Fixed
