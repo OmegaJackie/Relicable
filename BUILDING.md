@@ -65,31 +65,13 @@ with `Dalamud.dll`, `ImGui.NET.dll`, `Lumina.dll`, `Lumina.Excel.dll`, `FFXIVCli
 and friends. `Dalamud.NET.Sdk` finds that path automatically. To use a different location, set
 the `DALAMUD_HOME` environment variable to the folder containing `Dalamud.dll`.
 
-### On a Dalamud beta/staging branch, `Hooks\dev` is empty
-
-XIVLauncher only fills `Hooks\dev` on the **release** track. Opt into a beta branch — which is
-what everyone does in the days after a game patch, because staging carries the working build
-first — and it installs to a version-named folder instead:
-
-```
-%AppData%\XIVLauncher\addon\Hooks\15.0.2.3-76-g8323a3386\    <- the real build
-%AppData%\XIVLauncher\addon\Hooks\dev\                       <- left EMPTY
-```
-
-Both resolvers in this repository point at `dev`, and `DALAMUD_HOME` only fixes one of them:
-`ECommons.csproj` hardcodes `$(appdata)\xivlauncher\Addon\Hooks\dev\` on Windows and consults
-`DALAMUD_HOME` only in a Linux-conditioned `PropertyGroup`. So the build dies with roughly 1900
-`CS0246`s naming *ECommons* files, which reads like an ECommons problem and is really an empty
-folder. Mirror the real build into `dev`:
-
-```bash
-pwsh -File tools/sync-dalamud-libs.ps1
-```
-
-It picks the most recently written populated `Hooks\<version>` folder, copies it over `dev`,
-verifies every assembly ECommons references by `HintPath`, and prints the Dalamud /
-FFXIVClientStructs / Lumina versions you are now building against. Re-run it after each Dalamud
-update while you are on a beta branch; it is idempotent and a no-op on the release track.
+**If `Hooks\dev` is empty**, XIVLauncher installed to a version-named folder instead
+(`Hooks\15.0.3.0`) — seen on the release track as well as on a beta branch, so being on stable
+does not rule it out. Copy the newest `Hooks\<version>` folder over `Hooks\dev` before building.
+`DALAMUD_HOME` does not rescue this on its own: `ECommons.csproj` hardcodes the `dev` path on
+Windows and reads `DALAMUD_HOME` only in a Linux-conditioned `PropertyGroup`, so the build dies
+with roughly 1900 `CS0246`s naming *ECommons* files — which reads like an ECommons problem and is
+really an empty folder.
 
 ## 3. Build
 
