@@ -310,10 +310,33 @@ public sealed class ConfigWindow : Window
             "The first pass just glances at each FATE; later passes wait this many seconds. " +
             "0 waits indefinitely. Default 120.");
 
-        Checkbox("Grab co-located FATEs while in the zone",
+        Checkbox("Grab FATEs that are already up nearby",
             _config.PreferCoLocatedFates, v => _config.PreferCoLocatedFates = v);
-        Ui.Tooltip("When a book FATE is active in a zone where you also have enemy work, run it while you are " +
-            "there instead of saving all FATEs for last. Only triggers when the FATE has enough time left.");
+        Ui.Tooltip("Take a book FATE that is live in the zone you are STANDING IN before travelling anywhere " +
+            "else, and take one in a zone where you also have enemy work so a single teleport covers both. " +
+            "Only triggers when the FATE has enough time left to reach and clear.\n\n" +
+            "Turn this off for the strict enemies, leves, dungeons, then FATEs order regardless of what is live.");
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Teleporting");
+        Checkbox("Use Aetheryte Tickets for expensive teleports",
+            _config.UseAetheryteTickets, v => _config.UseAetheryteTickets = v);
+        Ui.Tooltip("Spend an Aetheryte Ticket instead of gil when the destination costs at least the amount " +
+            "below. Falls back to gil automatically when you have no tickets left.");
+
+        if (_config.UseAetheryteTickets)
+        {
+            var ticketMin = _config.AetheryteTicketMinGil;
+            if (ImGui.InputInt("Use a ticket at or above (gil)", ref ticketMin))
+            {
+                _config.AetheryteTicketMinGil = ticketMin < 1 ? 1 : ticketMin;
+                _dirty = true;
+            }
+            Ui.Tooltip("Compared against the game's own price for that destination, so favoured and free " +
+                "destinations are priced correctly. Cheap hops stay on gil and the tickets are saved for the " +
+                "long jumps. Default 300.");
+            Ui.Wrapped(Grey, $"Aetheryte Tickets held: {Steps.Teleporter.TicketsHeld()}");
+        }
 
         ImGui.Separator();
         ImGui.TextDisabled("Nexus (Light farm)");

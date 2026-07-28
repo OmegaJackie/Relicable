@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.4.0 — Stop flying away from a FATE that is already up
+
+### Fixed
+
+- **It no longer teleports away from a book FATE that is live in the zone you are standing in.**
+  The run order is by kind and book — enemies, then leves, then dungeons, then FATEs — and
+  nothing in it looked at where you actually were. So a FATE could be up in your own zone,
+  ready to clear, while the engine flew off to an enemy entry somewhere else and left it to
+  expire. A FATE that is up in your current zone is now taken first, ahead of everything,
+  because it is the one piece of work that costs no travel at all and will not be there later.
+  The existing "same zone as enemy work" pairing still applies after that, and both still
+  require enough time left on the FATE to actually reach and clear it.
+
+### Added
+
+- **Aetheryte Tickets.** The run teleports constantly — twelve atma zones, book entries
+  scattered across the whole of A Realm Reborn — and every hop was paid in gil. It can now
+  spend a ticket instead, but only when the destination is actually expensive: the threshold is
+  yours to set (default 300 gil), compared against the game's own price for that destination, so
+  favoured and free destinations are priced correctly and cheap hops stay on gil. Runs out of
+  tickets mid-session and it quietly goes back to paying gil. On by default; the switch and a
+  live ticket count are in `/relic config` → Teleporting.
+
+- **Choose which kinds of book work to do.** Book entries were worked in a fixed order with no
+  say in the matter, so there was no way to grind a book without spending leve allowances or
+  queueing dungeons. The main window now has a **Book work** section: leave it on **Auto** for
+  exactly the behaviour you have today, or switch to **Manual** and tick only the kinds you want
+  — Enemies, Leves, Dungeons, FATEs. Untick everything and it tells you rather than silently
+  stopping.
+
+- **Run a specific entry next.** The same section lists what is left in the book you are
+  holding, with a **Run next** button on each. It jumps the queue once, including for a kind you
+  have unticked, and if the engine is stopped the pick waits for you to press Start rather than
+  being thrown away.
+
 ## 1.5.3.2 — Say it out loud when a game patch moves something
 
 Patch 7.55 hardening. Two places in the plugin read the game at addresses and array

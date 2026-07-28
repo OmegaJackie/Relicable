@@ -120,11 +120,28 @@ public sealed class AetheryteTeleportExecutor : ITaskExecutor
 // controller tick), satisfying the threading invariant in DESIGN Appendix C.
 internal static unsafe class Teleporter
 {
+    // The Aetheryte Ticket item. Held in the normal bags, so the standard inventory count applies.
+    private const uint AetheryteTicketItemId = 7569;
+
+    // Set once at plugin load (Plugin ctor), like Steps.LocationNavigator.Config. Teleporter is
+    // static and reached from both the step executor and the window click helpers in GameActions,
+    // neither of which shares an ExecutionContext, so the ticket policy is read from here rather
+    // than threaded through every call site. Null-safe: no config means "gil", the old behaviour.
+    public static Configuration? Config { get; set; }
+
     // Refreshes the teleport list and returns the destination territory for an
     // aetheryte, or false if the aetheryte is not unlocked / not present.
     public static bool TryGetDestinationTerritory(uint aetheryteId, out ushort territory)
+        => TryGetTeleportInfo(aetheryteId, out territory, out _);
+
+    // The destination territory AND the game's own gil price for it. The price is what the
+    // teleport window would charge -- it already accounts for favoured destinations, free
+    // destinations, and the halved growth past 1000 -- so the ticket threshold compares against
+    // the real cost rather than a guess from distance.
+    private static bool TryGetTeleportInfo(uint aetheryteId, out ushort territory, out uint gilCost)
     {
         territory = 0;
+        gilCost = 0;
         if (!SafeToQuery())
             return false;
         var tp = Telepo.Instance();
@@ -141,13 +158,27 @@ internal static unsafe class Teleporter
             if (info.AetheryteId == aetheryteId)
             {
                 territory = info.TerritoryId;
+                // A free destination (grand company / free-trial style) costs nothing, so a ticket
+                // would be strictly wasted there; report 0 and let the threshold reject it.
+                gilCost = info.IsFreeAetheryte ? 0u : info.GilCost;
                 return true;
             }
         }
         return false;
     }
 
-    // Issues the teleport (standard aetheryte, subIndex 0).
+    // How many Aetheryte Tickets are in the bags.
+    public static int TicketsHeld() => GameState.InventoryCount(AetheryteTicketItemId);
+
+    // Issues the teleport (standard aetheryte, subIndex 0), spending an Aetheryte Ticket instead
+    // of gil when the option is on, a ticket is held, and the destination is at or above the
+    // configured gil threshold.
+    //
+    // The two paths are genuinely different native calls -- Telepo.Teleport charges gil, and
+    // Telepo.UseTicketInvoker.TeleportWithTickets spends a ticket -- so this is a real choice, not
+    // a flag on one call. The ticket path is attempted first and FALLS BACK to gil if it returns
+    // false, so a miscounted ticket or a destination the ticket path refuses can never strand a
+    // run that would otherwise have teleported fine.
     public static bool Teleport(uint aetheryteId)
     {
         if (!SafeToQuery())
@@ -155,8 +186,34 @@ internal static unsafe class Teleporter
         var tp = Telepo.Instance();
         if (tp == null)
             return false;
+
+        if (ShouldUseTicket(aetheryteId, out var gilCost))
+        {
+            // UpdateAetheryteList was already called by ShouldUseTicket's lookup.
+            if (tp->UseTicketInvoker.TeleportWithTickets(aetheryteId, 0))
+            {
+                DebugLog.Verbose($"Teleport: spent an Aetheryte Ticket for aetheryte {aetheryteId} " +
+                                 $"({gilCost}g saved, {TicketsHeld() - 1} left)");
+                return true;
+            }
+            DebugLog.Verbose($"Teleport: ticket path refused aetheryte {aetheryteId}; paying gil instead.");
+        }
+
         tp->UpdateAetheryteList();
         return tp->Teleport(aetheryteId, 0);
+    }
+
+    private static bool ShouldUseTicket(uint aetheryteId, out uint gilCost)
+    {
+        gilCost = 0;
+        var config = Config;
+        if (config is not { UseAetheryteTickets: true })
+            return false;
+        if (!TryGetTeleportInfo(aetheryteId, out _, out gilCost))
+            return false;
+        if (gilCost < (uint)Math.Max(1, config.AetheryteTicketMinGil))
+            return false;
+        return TicketsHeld() > 0;
     }
 
     // Safe to call Telepo.UpdateAetheryteList: the player exists and the world is not loading.

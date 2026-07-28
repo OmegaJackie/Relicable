@@ -98,6 +98,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Diagnostics.DebugLog.Enabled = _config.EnableDebugLog;
         Steps.LocationNavigator.Config = _config; // flight gate for the click-to-fly flow
+        Steps.Teleporter.Config = _config;        // Aetheryte Ticket policy for every teleport
         _prereqChecker = new BaseRelic.PrerequisiteChecker(_config);
 
         // IPC wrappers.

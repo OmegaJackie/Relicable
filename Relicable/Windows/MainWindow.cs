@@ -364,6 +364,118 @@ public sealed class MainWindow : Window
         return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? name.Substring(prefix.Length) : name;
     }
 
+    // Book work: which KINDS of Trials of the Braves slot the engine may work, plus a list of the
+    // active book's remaining slots so one can be pushed to the front.
+    //
+    // Only drawn while a book is actually in hand (a live RelicNote): outside the Animus stage
+    // there are no slots and nothing here would mean anything. Auto is unchanged from before this
+    // existed, so the section is purely additive for anyone who never opens it.
+    private void DrawBookWorkSelection()
+    {
+        var slots = _controller.IncompleteBookSlots();
+        if (slots.Count == 0)
+            return;
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Book work");
+
+        var mode = (int)_config.BookWorkMode;
+        if (ImGui.RadioButton("Auto##bookwork", ref mode, (int)BookWorkSelectionMode.Auto))
+        {
+            _config.BookWorkMode = BookWorkSelectionMode.Auto;
+            _saveConfig();
+            _controller.Replan();
+        }
+        Ui.Tooltip("Work every kind of book entry, in the usual order: enemies, then leves, then dungeons, then FATEs.");
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Manual##bookwork", ref mode, (int)BookWorkSelectionMode.Manual))
+        {
+            _config.BookWorkMode = BookWorkSelectionMode.Manual;
+            _saveConfig();
+            _controller.Replan();
+        }
+        Ui.Tooltip("Only work the kinds you tick below. Everything else in the book is left alone.");
+
+        if (_config.BookWorkMode == BookWorkSelectionMode.Manual)
+        {
+            DrawKindToggle("Enemies", BookWorkKinds.Enemies, "Hunt the book's enemy entries.");
+            ImGui.SameLine();
+            DrawKindToggle("Leves", BookWorkKinds.Leves, "Run the book's levequests. These spend leve allowances.");
+            DrawKindToggle("Dungeons", BookWorkKinds.Dungeons, "Queue and clear the book's dungeons (needs AutoDuty).");
+            ImGui.SameLine();
+            DrawKindToggle("FATEs", BookWorkKinds.Fates, "Wait for and clear the book's FATEs.");
+
+            if (_config.BookWorkKinds == BookWorkKinds.None)
+                Ui.Wrapped(Yellow, "Nothing is ticked, so there is no book work to do. The engine will ignore this " +
+                                   "filter rather than stop, until you tick something or switch back to Auto.");
+        }
+
+        // The remaining slots of the book in hand. Clicking one runs it next, ahead of the normal
+        // order -- including a kind that is currently unticked, which is the point of the list.
+        if (ImGui.TreeNode($"Remaining in this book ({slots.Count})###bookslots"))
+        {
+            foreach (var slot in slots)
+            {
+                var kind = KindLabel(slot.Completion.Kind);
+                var enabled = _config.BookWorkMode != BookWorkSelectionMode.Manual
+                              || KindAllowed(slot.Completion.Kind);
+
+                if (ImGui.SmallButton($"Run next##{slot.Id}"))
+                    _controller.RunObjectiveNow(slot.Id);
+                ImGui.SameLine();
+                ImGui.TextColored(enabled ? Grey : Yellow, $"[{kind}]");
+                ImGui.SameLine();
+                Ui.Wrapped(enabled ? Grey : Yellow, slot.DisplayName);
+                if (!enabled)
+                    Ui.Tooltip($"{kind} is unticked, so the engine will not pick this on its own. " +
+                               "\"Run next\" still runs it once.");
+            }
+
+            // Replan() is a no-op while stopped, so a pick made before pressing Start is queued
+            // rather than lost. Say so, otherwise the click looks like it did nothing.
+            if (_controller.HasForcedObjective && _controller.Current is RelicController.State.Idle or RelicController.State.Stopped)
+            {
+                Ui.Wrapped(Yellow, "Picked - it will run when you press Start.");
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Cancel##forced"))
+                    _controller.ClearForcedObjective();
+            }
+            ImGui.TreePop();
+        }
+    }
+
+    private void DrawKindToggle(string label, BookWorkKinds kind, string tooltip)
+    {
+        var on = (_config.BookWorkKinds & kind) != 0;
+        if (ImGui.Checkbox(label, ref on))
+        {
+            _config.BookWorkKinds = on
+                ? _config.BookWorkKinds | kind
+                : _config.BookWorkKinds & ~kind;
+            _saveConfig();
+            _controller.Replan();
+        }
+        Ui.Tooltip(tooltip);
+    }
+
+    private bool KindAllowed(CompletionKind kind) => kind switch
+    {
+        CompletionKind.MonsterSlot => (_config.BookWorkKinds & BookWorkKinds.Enemies) != 0,
+        CompletionKind.LeveSlot => (_config.BookWorkKinds & BookWorkKinds.Leves) != 0,
+        CompletionKind.DungeonSlot => (_config.BookWorkKinds & BookWorkKinds.Dungeons) != 0,
+        CompletionKind.FateSlot => (_config.BookWorkKinds & BookWorkKinds.Fates) != 0,
+        _ => true,
+    };
+
+    private static string KindLabel(CompletionKind kind) => kind switch
+    {
+        CompletionKind.MonsterSlot => "Enemy",
+        CompletionKind.LeveSlot => "Leve",
+        CompletionKind.DungeonSlot => "Dungeon",
+        CompletionKind.FateSlot => "FATE",
+        _ => kind.ToString(),
+    };
+
     // Stage selection: Auto works the lowest incomplete stage (original behaviour);
     // Manual pins work to a user-inserted stage so a passed/farmable stage (Atma,
     // Novus, Nexus, Zeta) can be revisited. Changes apply immediately via Replan.
@@ -398,6 +510,8 @@ public sealed class MainWindow : Window
             }
             ImGui.TextColored(Grey, "Pins work to this stage; lets you go back to a farmable stage.");
         }
+
+        DrawBookWorkSelection();
 
         // Heads-up when Auto has nothing to do because the base weapon is not done yet.
         if (_config.StageMode == StageSelectionMode.Auto && BaseRelicState.ShouldWorkBaseRelic())

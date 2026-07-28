@@ -192,12 +192,44 @@ public sealed class Configuration : IPluginConfiguration
     // (wait indefinitely at the first FATE, the old behaviour).
     public int FateRotateSeconds { get; set; } = 120;
 
-    // Opportunistic FATE grab: when a book FATE is up RIGHT NOW in a zone where we also have
-    // enemy (monster) work to do, do that FATE before deferring it to last -- one teleport covers
-    // both, and the FATE will not be up later. Only fires when the FATE has more than
-    // ~3 minutes left so there is time to reach and clear it. On by default; turn off to keep the
-    // strict enemies-then-leves-then-dungeons-then-FATEs order.
+    // Opportunistic FATE grab, in priority order:
+    //
+    //   1. A book FATE that is up RIGHT NOW in the zone the character is STANDING IN. Taking it
+    //      costs no travel at all, and the FATE will not be up later -- teleporting away from a
+    //      live FATE to go do ordered work elsewhere is pure loss. This covers the reported
+    //      "a FATE was up in my zone and it teleported away anyway": the engine had already
+    //      settled on an objective in another zone, and nothing looked at where we actually were.
+    //   2. A book FATE up in a zone where we also have enemy (monster) work, so one teleport
+    //      covers both.
+    //
+    // Both only fire when the FATE has more than ~3 minutes left, so there is time to reach and
+    // clear it. On by default; turn off for the strict enemies-then-leves-then-dungeons-then-FATEs
+    // order regardless of what is live.
     public bool PreferCoLocatedFates { get; set; } = true;
+
+    // How book work is chosen. Auto = every kind, in the authored order. Manual = only the kinds
+    // ticked in BookWorkKinds (main window > Book work), which is also where a specific slot can
+    // be pushed to the front with "Run next".
+    public BookWorkSelectionMode BookWorkMode { get; set; } = BookWorkSelectionMode.Auto;
+
+    // Which book-slot kinds Manual mode is allowed to work. Ignored entirely in Auto.
+    // Persisted as an int flag set; All is the starting point so switching to Manual changes
+    // nothing until something is unticked.
+    public BookWorkKinds BookWorkKinds { get; set; } = BookWorkKinds.All;
+
+    // ---- Teleporting ----
+    // Spend an Aetheryte Ticket instead of gil when the destination is expensive. The engine
+    // teleports constantly (twelve atma zones, book slots scattered across ARR), so on a long
+    // unattended run this is the difference between a rounding error and a real gil drain.
+    // Tickets are only spent when the destination's own gil cost is at least
+    // AetheryteTicketMinGil, so cheap intra-region hops stay on gil and the ticket stack is
+    // saved for the long jumps. Falls back to gil automatically when no ticket is held.
+    public bool UseAetheryteTickets { get; set; } = true;
+
+    // The gil cost at or above which a ticket is spent. The game's own per-destination cost is
+    // read live from the teleport list, so this compares against the real price including any
+    // favoured/free-destination discount. Clamped to at least 1.
+    public int AetheryteTicketMinGil { get; set; } = 300;
 
     // ---- Base relic (A Relic Reborn) ----
     // The job whose base-relic requirements the prerequisite checker reports. None
