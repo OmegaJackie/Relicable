@@ -38,15 +38,11 @@ public static unsafe class GameActions
             return;
         try
         {
-            // Native UpdateAetheryteList faults if the world is still loading; the try/catch cannot
-            // catch that, so gate on a safe state first (see Teleporter.SafeToQuery).
-            if (!Teleporter.SafeToQuery())
-                return;
-            var t = Telepo.Instance();
-            if (t == null)
-                return;
-            t->UpdateAetheryteList();
-            t->Teleport(aetheryte, 0);
+            // Routed through Teleporter so a UI click honours the Aetheryte Ticket policy exactly
+            // as the engine's own teleport step does. It also gates on Teleporter.SafeToQuery:
+            // the native UpdateAetheryteList faults if the world is still loading, and a try/catch
+            // cannot catch that.
+            Teleporter.Teleport(aetheryte);
         }
         catch (Exception ex) { Diagnostics.DebugLog.Warn($"Teleport failed: {ex.Message}"); }
     }
@@ -80,14 +76,8 @@ public static unsafe class GameActions
             return;
         try
         {
-            // Same guard as TeleportToZone: UpdateAetheryteList faults while the world is loading.
-            if (!Teleporter.SafeToQuery())
-                return;
-            var t = Telepo.Instance();
-            if (t == null)
-                return;
-            t->UpdateAetheryteList();
-            t->Teleport(aetheryteId, 0);
+            // Same guard and the same ticket policy as TeleportToZone.
+            Teleporter.Teleport(aetheryteId);
         }
         catch (Exception ex) { Diagnostics.DebugLog.Warn($"TeleportToAetheryte failed: {ex.Message}"); }
     }

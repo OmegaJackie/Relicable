@@ -869,9 +869,32 @@ public sealed class RelicController
             DebugLog.Info($"SelectObjective: activeNote={activeNote}, totalObjectives={_objectives.Count}, incomplete[{counts}]");
         }
 
-        // Opportunistic co-located FATE: if a book FATE is up right now in a zone where we also
-        // have enemy work, do it NOW rather than deferring it to last -- one teleport covers both,
-        // and the FATE will not be up later. Overrides the FATE-last ordering below.
+        // Manual book work: drop the kinds the user has unticked. Applied to book slots ONLY --
+        // every other objective (upgrades, the atma farm, gauge farms, the base relic) is not a
+        // "kind" the user is choosing between, and unticking Dungeons must not strand the run by
+        // also hiding, say, the Jalzahn enhancement. If the filter would empty the pool the run
+        // would just stop with no explanation, so it is reported and skipped instead.
+        pool = ApplyBookKindFilter(pool);
+
+        // "Run next": a slot the user clicked in the main window jumps the queue once. Checked
+        // before the opportunistic FATE grab, because an explicit click should beat a heuristic.
+        if (TakeForcedObjective(pool) is { } forced)
+        {
+            if (!EquippedRelicOk(forced, activeNote))
+                return; // guard stopped the run with guidance
+            _objective = forced;
+            _ctx.CurrentObjective = forced;
+            _stepIndex = 0;
+            DebugLog.Info($"Objective selected (Run next, user-picked): {forced.Stage} '{forced.DisplayName}'");
+            BeginStep();
+            _state = State.RunStep;
+            return;
+        }
+
+        // Opportunistic co-located FATE: if a book FATE is up right now in the zone we are standing
+        // in -- or in a zone where we also have enemy work -- do it NOW rather than deferring it to
+        // last. One teleport covers both, and the FATE will not be up later. Overrides the
+        // FATE-last ordering below.
         if (FindCoLocatedActiveFate(pool) is { } coFate)
         {
             if (!EquippedRelicOk(coFate, activeNote))
@@ -1121,7 +1144,21 @@ public sealed class RelicController
         if (!_ctx.Config.PreferCoLocatedFates)
             return null;
 
-        // Zones where we still have enemy (monster) work in this pool.
+        // 1) A book FATE live in the zone we are STANDING IN. This outranks everything, including
+        //    the enemy-work pairing below, because it is the only case that costs no travel at all:
+        //    we are already there. It is also the fix for "a FATE was up in my zone and it
+        //    teleported away anyway" -- the ordering further down is purely by kind and book, so
+        //    without this the engine would happily fly to another zone's enemy slot while a FATE
+        //    that will NOT be up later burned down behind it.
+        var here = Plugin.ClientState.TerritoryType;
+        if (here != 0 && FindActiveFateInZone(pool, here) is { } inZone)
+        {
+            DebugLog.Info($"FATE '{inZone.DisplayName}' is up in the zone we are already in; " +
+                          "taking it before travelling elsewhere.");
+            return inZone;
+        }
+
+        // 2) Zones where we still have enemy (monster) work in this pool: one teleport covers both.
         var enemyZones = new HashSet<uint>();
         foreach (var o in pool)
             if (o.Completion.Kind == CompletionKind.MonsterSlot && o.Territory != 0)
@@ -1129,10 +1166,25 @@ public sealed class RelicController
         if (enemyZones.Count == 0)
             return null;
 
+        foreach (var zone in enemyZones)
+            if (FindActiveFateInZone(pool, zone) is { } coFate)
+            {
+                DebugLog.Info($"Co-located FATE '{coFate.DisplayName}' is up in a zone with enemy work; " +
+                              "grabbing it to save a teleport.");
+                return coFate;
+            }
+        return null;
+    }
+
+    // The first objective in `pool` that is a book FATE slot in `territory` whose FATE is actually
+    // running with enough time left to reach and clear it. Shared by both arms above so "is this
+    // FATE worth diverting to" is decided in exactly one place.
+    private static RelicObjective? FindActiveFateInZone(IReadOnlyList<RelicObjective> pool, uint territory)
+    {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         foreach (var o in pool)
         {
-            if (o.Completion.Kind != CompletionKind.FateSlot || o.Territory == 0 || !enemyZones.Contains(o.Territory))
+            if (o.Completion.Kind != CompletionKind.FateSlot || o.Territory != territory)
                 continue;
             var fateId = FateIdOf(o);
             if (fateId == 0)
@@ -1140,13 +1192,119 @@ public sealed class RelicController
             // Read the live FATE: only redirect if it is actually up with enough time left.
             if (Steps.Fates.ById((ushort)fateId) is not { State: FateState.Running } fate)
                 continue;
-            var remaining = fate.StartTimeEpoch + fate.Duration - now;
-            if (remaining <= FateMinRemainingSeconds)
+            if (fate.StartTimeEpoch + fate.Duration - now <= FateMinRemainingSeconds)
                 continue;
-            DebugLog.Info($"Co-located FATE '{o.DisplayName}' is up ({remaining}s left) in a zone with enemy work; grabbing it to save a teleport.");
             return o;
         }
         return null;
+    }
+
+    // ---- Manual book work (main window > Book work) ----
+
+    // The ACTIVE book's incomplete slots, for the main window's pick-a-slot list. Filtered to the
+    // live RelicNote so the list matches the book actually in hand, and ordered by kind then slot
+    // so it reads like the book page rather than in engine-internal order.
+    //
+    // Deliberately NOT kind-filtered: the list is how a user reaches a slot whose kind is
+    // currently unticked, which is the whole point of being able to force one.
+    //
+    // Cached briefly because this is called from the ImGui draw loop, i.e. every frame the main
+    // window is open, and it evaluates IsObjectiveComplete (a live game-state read) for every
+    // loaded objective. A book slot cannot change faster than the player can clear one, so a
+    // quarter-second of staleness is invisible and the per-frame cost stops mattering.
+    private IReadOnlyList<RelicObjective> _bookSlotCache = System.Array.Empty<RelicObjective>();
+    private long _bookSlotCacheTick;
+    private const long BookSlotCacheMs = 250;
+
+    public IReadOnlyList<RelicObjective> IncompleteBookSlots()
+    {
+        if (Environment.TickCount64 - _bookSlotCacheTick < BookSlotCacheMs)
+            return _bookSlotCache;
+        _bookSlotCacheTick = Environment.TickCount64;
+        _bookSlotCache = BuildIncompleteBookSlots();
+        return _bookSlotCache;
+    }
+
+    private IReadOnlyList<RelicObjective> BuildIncompleteBookSlots()
+    {
+        var activeNote = GameState.ActiveRelicNoteId();
+        if (activeNote == 0)
+            return System.Array.Empty<RelicObjective>();
+        return _objectives
+            .Where(o => BookKindOf(o.Completion.Kind) != null
+                        && o.Book == activeNote
+                        && !IsObjectiveComplete(o))
+            .OrderBy(o => KindPriority(o.Completion.Kind))
+            .ThenBy(o => o.Completion.Slot)
+            .ToList();
+    }
+
+    // The slot the user asked to run next, consumed on the next selection. Not persisted: it is a
+    // one-shot "do this one now", not a setting.
+    private string? _forcedObjectiveId;
+
+    // Queue a specific objective to be selected next, ahead of the normal order. Ignored silently
+    // if the id is no longer in the pool by the time selection runs (it completed, the book
+    // advanced, or the stage filter moved) -- a stale click must never wedge the engine.
+    public void RunObjectiveNow(string objectiveId)
+    {
+        _forcedObjectiveId = objectiveId;
+        DebugLog.Info($"Run next: queued objective '{objectiveId}'.");
+        Replan();
+    }
+
+    public bool HasForcedObjective => _forcedObjectiveId != null;
+
+    public void ClearForcedObjective() => _forcedObjectiveId = null;
+
+    private RelicObjective? TakeForcedObjective(IReadOnlyList<RelicObjective> pool)
+    {
+        if (_forcedObjectiveId == null)
+            return null;
+        var match = pool.FirstOrDefault(o => o.Id == _forcedObjectiveId);
+        // Consumed either way: a request that no longer applies is dropped rather than retried
+        // forever against a pool it will never match.
+        if (match == null)
+            DebugLog.Info($"Run next: '{_forcedObjectiveId}' is no longer available; falling back to normal order.");
+        _forcedObjectiveId = null;
+        return match;
+    }
+
+    // The user-selectable kind of a book slot, or null for everything else in the pool.
+    private static BookWorkKinds? BookKindOf(CompletionKind kind) => kind switch
+    {
+        CompletionKind.MonsterSlot => BookWorkKinds.Enemies,
+        CompletionKind.LeveSlot => BookWorkKinds.Leves,
+        CompletionKind.DungeonSlot => BookWorkKinds.Dungeons,
+        CompletionKind.FateSlot => BookWorkKinds.Fates,
+        _ => null,
+    };
+
+    // Manual mode: keep only the book-slot kinds the user ticked. Non-book objectives always pass.
+    private List<RelicObjective> ApplyBookKindFilter(List<RelicObjective> pool)
+    {
+        if (_ctx.Config.BookWorkMode != BookWorkSelectionMode.Manual)
+            return pool;
+
+        var allowed = _ctx.Config.BookWorkKinds;
+        var filtered = pool
+            .Where(o => BookKindOf(o.Completion.Kind) is not { } k || (allowed & k) != 0)
+            .ToList();
+
+        // Everything left was a book slot of an unticked kind. Filtering to empty would stop the
+        // run with "the relic line is finished", which is both wrong and baffling, so say what
+        // actually happened and let the unfiltered pool through.
+        if (filtered.Count == 0 && pool.Count > 0)
+        {
+            DebugLog.Warn("Book work is set to Manual but every remaining objective is a kind you have " +
+                          "unticked, so the filter was ignored for this pick. Tick more kinds in the main " +
+                          "window (Book work), or switch back to Auto.");
+            return pool;
+        }
+
+        if (DebugLog.On && filtered.Count != pool.Count)
+            DebugLog.Verbose($"Book work Manual ({allowed}): {pool.Count - filtered.Count} objective(s) filtered out.");
+        return filtered;
     }
 
     // The FATE row id an Animus FATE objective participates in (from its ParticipateFate step).
