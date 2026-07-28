@@ -43,6 +43,16 @@ Relicable/              <- this repository (the repo root)
 ECommons is listed in `.gitignore` on purpose, so the clone will not show up as an untracked
 change.
 
+> **Reproducing a release build:** CI pins ECommons to an exact commit (the `$sha` line in
+> `.github/workflows/release.yml`), because an upstream commit can otherwise break an
+> already-tagged Relicable build — most likely just after a game patch, when ECommons is being
+> updated frequently. A plain clone as above tracks the default branch instead, which is fine
+> for day-to-day work. To match CI exactly, check that SHA out:
+>
+> ```bash
+> git -C ECommons fetch --depth 1 origin <sha> && git -C ECommons checkout --detach FETCH_HEAD
+> ```
+
 ## 2. Get the Dalamud dev libraries
 
 Run FFXIV through XIVLauncher with Dalamud enabled once. That populates:
@@ -54,6 +64,32 @@ Run FFXIV through XIVLauncher with Dalamud enabled once. That populates:
 with `Dalamud.dll`, `ImGui.NET.dll`, `Lumina.dll`, `Lumina.Excel.dll`, `FFXIVClientStructs.dll`
 and friends. `Dalamud.NET.Sdk` finds that path automatically. To use a different location, set
 the `DALAMUD_HOME` environment variable to the folder containing `Dalamud.dll`.
+
+### On a Dalamud beta/staging branch, `Hooks\dev` is empty
+
+XIVLauncher only fills `Hooks\dev` on the **release** track. Opt into a beta branch — which is
+what everyone does in the days after a game patch, because staging carries the working build
+first — and it installs to a version-named folder instead:
+
+```
+%AppData%\XIVLauncher\addon\Hooks\15.0.2.3-76-g8323a3386\    <- the real build
+%AppData%\XIVLauncher\addon\Hooks\dev\                       <- left EMPTY
+```
+
+Both resolvers in this repository point at `dev`, and `DALAMUD_HOME` only fixes one of them:
+`ECommons.csproj` hardcodes `$(appdata)\xivlauncher\Addon\Hooks\dev\` on Windows and consults
+`DALAMUD_HOME` only in a Linux-conditioned `PropertyGroup`. So the build dies with roughly 1900
+`CS0246`s naming *ECommons* files, which reads like an ECommons problem and is really an empty
+folder. Mirror the real build into `dev`:
+
+```bash
+pwsh -File tools/sync-dalamud-libs.ps1
+```
+
+It picks the most recently written populated `Hooks\<version>` folder, copies it over `dev`,
+verifies every assembly ECommons references by `HintPath`, and prints the Dalamud /
+FFXIVClientStructs / Lumina versions you are now building against. Re-run it after each Dalamud
+update while you are on a beta branch; it is idempotent and a no-op on the release track.
 
 ## 3. Build
 

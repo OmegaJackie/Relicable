@@ -58,21 +58,44 @@ jobs:
       # vendored or submoduled, so it must be cloned here or the build fails at
       # restore with "project file does not exist".
       #
-      # This pins to the DEFAULT BRANCH, which means an upstream commit can
-      # break a tagged build of Relicable after the fact. Pinning to a commit
-      # SHA is SAFER and is what you want once the plugin is public:
+      # PINNED TO A COMMIT SHA. This used to clone the default branch, which meant an
+      # upstream commit could break a build of an ALREADY-TAGGED Relicable release --
+      # and the failure surfaces as a wall of CS0246/CS1061 inside ECommons files, not
+      # ours, so it reads like our bug. The window is widest right after a game patch,
+      # when NightmareXIV is pushing AddonMaster fixes hourly.
       #
-      #     git clone https://github.com/NightmareXIV/ECommons ECommons
-      #     git -C ECommons checkout <full-40-char-sha>
+      # TO MOVE THE PIN: check the new SHA out locally, build, then edit the one line
+      # below. Keep the date comment so how stale it is, is obvious.
       #
-      # (--depth 1 below is incompatible with checking out an arbitrary SHA;
-      # drop it, or use `git fetch --depth 1 origin <sha>`, when you pin.)
+      # (`git clone --depth 1` cannot check out an arbitrary SHA, hence the
+      # init + fetch --depth 1 <sha> shape; GitHub allows fetching a bare SHA.)
       # ------------------------------------------------------------------
       - name: Clone ECommons (gitignored dependency, not a submodule)
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/NightmareXIV/ECommons ECommons
-          Write-Host "ECommons at commit: $(git -C ECommons rev-parse HEAD)"
+          $ErrorActionPreference = 'Stop'
+          # Exit codes are checked by hand below so the failure can be EXPLAINED. Without
+          # this, PowerShell 7.3+ turns a nonzero native exit into a throw first and the
+          # diagnostic never prints. (Harmless no-op on older PowerShell.)
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $sha = 'ea0ac0c63129e7bde3f40024088d6257602b23d8'   # 2026-06-29
+
+          git init ECommons
+          git -C ECommons remote add origin https://github.com/NightmareXIV/ECommons
+          git -C ECommons fetch --depth 1 origin $sha
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Could not fetch ECommons $sha - has it been force-pushed away? Update the pin."
+            exit 1
+          }
+          git -C ECommons checkout --detach FETCH_HEAD
+
+          $head = git -C ECommons rev-parse HEAD
+          if ($head -ne $sha) {
+            Write-Error "ECommons is at $head, expected the pinned $sha."
+            exit 1
+          }
+          Write-Host "ECommons pinned at: $head"
 
       # ------------------------------------------------------------------
       # 3. .NET 10 SDK
@@ -112,12 +135,23 @@ jobs:
       # developer machine genuinely has, and the default both projects agree on -
       # and point DALAMUD_HOME at that same folder. One copy, both resolvers.
       #
-      # "latest.zip" is the STABLE Dalamud branch. If the plugin ever has to be
-      # built against a Dalamud API level that is still on staging, switch to
-      #   https://goatcorp.github.io/dalamud-distrib/stg/latest.zip
-      # The API level of whatever is downloaded must match Dalamud.NET.Sdk's
-      # (currently API 15); a mismatch shows up as CS1061/CS0117 on single
-      # members rather than as a clean error.
+      # WHICH TRACK: resolved at build time rather than hardcoded.
+      #
+      # This used to always take "latest.zip", the STABLE branch. For the hours-to-days
+      # after a game patch, stable does not support the live client at all -- goatcorp
+      # ships the working build on STAGING first -- so a release cut in that window
+      # compiled against reference assemblies (chiefly FFXIVClientStructs) that no
+      # player was running. It builds green and misbehaves at runtime, which is the
+      # worst shape a patch-day bug can take. Hardcoding staging is wrong the other 50
+      # weeks of the year, and "remember to flip it back" is not a mechanism.
+      #
+      # So ask goatcorp's own API which track supports the CURRENT live client, prefer
+      # stable when both do, and download exactly the build it names. Falls back to the
+      # old stable URL if the API cannot be reached, so an outage cannot block a release.
+      #
+      # The API level of whatever lands must match Dalamud.NET.Sdk's (currently 15);
+      # a mismatch otherwise shows up as CS1061/CS0117 on single members rather than as
+      # a clean error, so it is checked explicitly below.
       # ------------------------------------------------------------------
       - name: Download and extract Dalamud
         shell: pwsh
@@ -128,8 +162,43 @@ jobs:
           $dalamudDir = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
           New-Item -ItemType Directory -Force -Path $dalamudDir | Out-Null
 
-          $zip = Join-Path $env:RUNNER_TEMP 'dalamud-latest.zip'
-          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile $zip
+          # Stable first: it is the right answer whenever it is a valid answer.
+          $info = $null
+          $chosen = $null
+          foreach ($track in @('release', 'stg')) {
+            try {
+              $c = Invoke-RestMethod -Uri "https://kamori.goats.dev/Dalamud/Release/VersionInfo?track=$track" -TimeoutSec 30
+            } catch {
+              Write-Host "  ${track}: could not be queried ($($_.Exception.Message))"
+              continue
+            }
+            Write-Host "  ${track}: $($c.assemblyVersion), supports game $($c.supportedGameVer), applicable=$($c.isApplicableForCurrentGameVer)"
+            if ($c.isApplicableForCurrentGameVer -and $c.downloadUrl) {
+              $info = $c
+              $chosen = $track
+              break
+            }
+          }
+
+          $zip = Join-Path $env:RUNNER_TEMP 'dalamud.zip'
+          if ($info) {
+            Write-Host "Building against the '$chosen' track: Dalamud $($info.assemblyVersion)"
+
+            # An API-level bump is a source change, not something to paper over: the SDK
+            # version in Relicable.csproj and DalamudApiLevel in repo.json both have to move
+            # with it. Fail here, where the reason is obvious.
+            $major = ($info.assemblyVersion -split '[.\-]')[0]
+            if ($major -ne '15') {
+              Write-Error "Dalamud on '$chosen' is API $major but this repo targets API 15 (Dalamud.NET.Sdk/15.0.0). Bump the SDK version in Relicable/Relicable.csproj and DalamudApiLevel in repo.json."
+              exit 1
+            }
+
+            Invoke-WebRequest -Uri $info.downloadUrl -OutFile $zip
+          }
+          else {
+            Write-Host '::warning::No Dalamud track reported support for the live client; falling back to stable latest.zip. If a game patch just landed, WAIT rather than shipping this build.'
+            Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile $zip
+          }
           Expand-Archive -Path $zip -DestinationPath $dalamudDir -Force
 
           # Sanity check: if Dalamud.dll is not here the build will fail later
@@ -142,9 +211,14 @@ jobs:
           # ECommons references these by name; a distrib reshuffle that drops one would
           # otherwise resurface as a wall of CS0246 deep inside ECommons. Name the missing
           # file here instead.
+          # (The full HintPath set from ECommons.csproj - tools/sync-dalamud-libs.ps1 checks
+          # the same list locally.)
           foreach ($required in @(
             'Dalamud.dll','Dalamud.Common.dll','Dalamud.Bindings.ImGui.dll',
-            'Lumina.dll','Lumina.Excel.dll','FFXIVClientStructs.dll','Newtonsoft.Json.dll')) {
+            'Dalamud.Bindings.ImPlot.dll','Dalamud.Bindings.ImGuizmo.dll',
+            'Lumina.dll','Lumina.Excel.dll','FFXIVClientStructs.dll',
+            'InteropGenerator.Runtime.dll','Newtonsoft.Json.dll','Mono.Cecil.dll',
+            'Reloaded.Hooks.Definitions.dll','Serilog.dll','TerraFX.Interop.Windows.dll')) {
             if (-not (Test-Path (Join-Path $dalamudDir $required))) {
               Write-Error "$required not found in $dalamudDir - ECommons references it by HintPath."
               exit 1
@@ -154,6 +228,14 @@ jobs:
           # Export DALAMUD_HOME too, for Dalamud.NET.Sdk (Relicable's own project).
           "DALAMUD_HOME=$dalamudDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Dalamud reference assemblies at: $dalamudDir"
+
+          # Record what this build actually compiled against. FFXIVClientStructs is the one
+          # that moves every patch, and "which build was 1.5.x compiled against" is the first
+          # question asked when a release misbehaves only after a patch.
+          foreach ($n in @('Dalamud.dll','FFXIVClientStructs.dll','Lumina.dll','Lumina.Excel.dll')) {
+            $f = Get-Item (Join-Path $dalamudDir $n)
+            Write-Host ('  {0,-26} {1}' -f $f.Name, $f.VersionInfo.FileVersion)
+          }
 
       # ------------------------------------------------------------------
       # 5. Build
