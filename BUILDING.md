@@ -65,15 +65,15 @@ with `Dalamud.dll`, `ImGui.NET.dll`, `Lumina.dll`, `Lumina.Excel.dll`, `FFXIVCli
 and friends. `Dalamud.NET.Sdk` finds that path automatically. To use a different location, set
 the `DALAMUD_HOME` environment variable to the folder containing `Dalamud.dll`.
 
-### On a Dalamud beta/staging branch, `Hooks\dev` is empty
+### `Hooks\dev` is often empty — check before you blame the build
 
-XIVLauncher only fills `Hooks\dev` on the **release** track. Opt into a beta branch — which is
-what everyone does in the days after a game patch, because staging carries the working build
-first — and it installs to a version-named folder instead:
+XIVLauncher installs Dalamud into a **version-named** folder and can leave `Hooks\dev` empty.
+This has been observed on the **release** track and on a beta branch, so do not assume `dev`
+is populated just because you are on stable:
 
 ```
-%AppData%\XIVLauncher\addon\Hooks\15.0.2.3-76-g8323a3386\    <- the real build
-%AppData%\XIVLauncher\addon\Hooks\dev\                       <- left EMPTY
+%AppData%\XIVLauncher\addon\Hooks\15.0.3.0\    <- the real build
+%AppData%\XIVLauncher\addon\Hooks\dev\         <- EMPTY
 ```
 
 Both resolvers in this repository point at `dev`, and `DALAMUD_HOME` only fixes one of them:
@@ -89,7 +89,8 @@ pwsh -File tools/sync-dalamud-libs.ps1
 It picks the most recently written populated `Hooks\<version>` folder, copies it over `dev`,
 verifies every assembly ECommons references by `HintPath`, and prints the Dalamud /
 FFXIVClientStructs / Lumina versions you are now building against. Re-run it after each Dalamud
-update while you are on a beta branch; it is idempotent and a no-op on the release track.
+update. It is idempotent — if `dev` already holds the build on offer it does nothing, so it will
+not clobber a freshly installed `dev` with an older version-named folder left over on disk.
 
 ## 3. Build
 

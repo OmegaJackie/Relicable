@@ -4,11 +4,11 @@
     addon\Hooks\dev, which is where both build resolvers look.
 
 .DESCRIPTION
-    XIVLauncher only extracts into Hooks\dev while you are on the RELEASE track. Opt into a
-    beta/staging branch (launcherConfigV3.json -> DalamudBetaKind) and it extracts into a
-    version-named folder instead -- Hooks\15.0.2.3-76-g8323a3386 -- and leaves Hooks\dev
-    EMPTY. That matters right after a game patch, which is exactly when everyone switches to
-    staging, because both of this repository's resolvers are pinned to dev:
+    XIVLauncher installs Dalamud into a VERSION-NAMED folder -- Hooks\15.0.3.0 -- and can
+    leave Hooks\dev empty. That has been observed on both the release track and a beta
+    branch, so do not assume a populated dev just because you are on stable; check.
+
+    It matters because both of this repository's resolvers are pinned to dev:
 
       * Dalamud.NET.Sdk (Relicable.csproj) defaults to %AppData%\XIVLauncher\addon\Hooks\dev,
         overridable with the DALAMUD_HOME environment variable.
@@ -22,21 +22,23 @@
     IDalamudTextureWrap ...) before Relicable is even reached -- errors that look like an
     ECommons problem and are really an empty folder.
 
-    Re-run this after every Dalamud update while you are on a beta branch. It is idempotent.
+    Re-run after every Dalamud update. It is idempotent: if dev already holds the build being
+    offered, it does nothing rather than recopying.
 
 .PARAMETER Source
     Explicit source folder. Defaults to the most recently written Hooks\<version> folder that
     actually contains Dalamud.dll.
 
-.PARAMETER WhatIf
-    Report what would be copied without touching anything.
+.PARAMETER Force
+    Copy even when dev already holds the same build.
 
 .EXAMPLE
     pwsh -File tools/sync-dalamud-libs.ps1
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $Source
+    [string] $Source,
+    [switch] $Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,9 +51,9 @@ if (-not (Test-Path $hooks)) {
 }
 
 # Pick the newest version-named folder that really holds a build. "Newest by LastWriteTime"
-# rather than by parsing the version out of the name: the names carry git describe suffixes
-# (15.0.2.3-76-g8323a3386) that do not sort as versions, and the folder XIVLauncher wrote
-# most recently is the one it is actually loading.
+# rather than by parsing the version out of the name: the names can carry git describe
+# suffixes (15.0.2.3-76-g8323a3386) that do not sort as versions, and the folder XIVLauncher
+# wrote most recently is the one it is actually loading.
 if (-not $Source) {
     $candidate = Get-ChildItem $hooks -Directory |
         Where-Object { $_.Name -ne 'dev' -and (Test-Path (Join-Path $_.FullName 'Dalamud.dll')) } |
@@ -60,8 +62,7 @@ if (-not $Source) {
 
     if (-not $candidate) {
         if (Test-Path (Join-Path $dev 'Dalamud.dll')) {
-            Write-Host "Hooks\dev is already populated and no version-named build exists - nothing to do."
-            Write-Host "(That is the normal state on the release track.)"
+            Write-Host 'Hooks\dev is populated and no version-named build exists - nothing to do.'
             return
         }
         throw "No populated Dalamud build found under $hooks. Launch the game once through XIVLauncher."
@@ -69,19 +70,36 @@ if (-not $Source) {
     $Source = $candidate.FullName
 }
 
-if (-not (Test-Path (Join-Path $Source 'Dalamud.dll'))) {
+$srcDll = Join-Path $Source 'Dalamud.dll'
+if (-not (Test-Path $srcDll)) {
     throw "$Source does not contain Dalamud.dll."
 }
+$devDll = Join-Path $dev 'Dalamud.dll'
 
-$srcVer = (Get-Item (Join-Path $Source 'Dalamud.dll')).VersionInfo.FileVersion
-$devVer = if (Test-Path (Join-Path $dev 'Dalamud.dll')) {
-    (Get-Item (Join-Path $dev 'Dalamud.dll')).VersionInfo.FileVersion
-} else { '<empty>' }
+# Identity is (FileVersion, LastWriteTime), not FileVersion alone: a staging build and the
+# stable build it came from report the SAME FileVersion (15.0.2.3 vs 15.0.2.3-76-g8323a3386
+# both read 15.0.2.3), so comparing versions alone would call them identical. Copy-Item
+# preserves file timestamps, so a synced dev matches its source exactly on both.
+function Get-BuildId([string] $dll) {
+    if (-not (Test-Path $dll)) { return $null }
+    $f = Get-Item $dll
+    return "$($f.VersionInfo.FileVersion)@$($f.LastWriteTimeUtc.Ticks)"
+}
 
-Write-Host "Source : $Source  (Dalamud $srcVer)"
-Write-Host "Target : $dev  (Dalamud $devVer)"
+$srcId = Get-BuildId $srcDll
+$devId = Get-BuildId $devDll
 
-if ($PSCmdlet.ShouldProcess($dev, "mirror $(Split-Path $Source -Leaf)")) {
+Write-Host "Source : $Source  (Dalamud $((Get-Item $srcDll).VersionInfo.FileVersion))"
+Write-Host "Target : $dev  ($(if ($devId) { "Dalamud $((Get-Item $devDll).VersionInfo.FileVersion)" } else { 'empty' }))"
+
+# Guard against the inverse mistake: XIVLauncher freshly populating dev while an OLDER
+# version-named folder lingers on disk, where a blind copy would overwrite the current build
+# with a stale one.
+$upToDate = $srcId -and $devId -and ($srcId -eq $devId)
+if ($upToDate -and -not $Force) {
+    Write-Host 'Already in sync - nothing to copy. (Use -Force to copy anyway.)'
+}
+elseif ($PSCmdlet.ShouldProcess($dev, "mirror $(Split-Path $Source -Leaf)")) {
     New-Item -ItemType Directory -Force -Path $dev | Out-Null
     Copy-Item -Path (Join-Path $Source '*') -Destination $dev -Recurse -Force
     Write-Host "Copied $((Get-ChildItem $Source -File).Count) files."
