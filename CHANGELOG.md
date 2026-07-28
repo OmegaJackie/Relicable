@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.3.2 — Say it out loud when a game patch moves something
+
+Patch 7.55 hardening. Two places in the plugin read the game at addresses and array
+positions that a game patch can renumber with no warning and no build error. Neither used to
+announce itself; both do now.
+
+### Changed
+
+- **A broken retainer lookup is reported at load, not hours later.** Pulling an item out of a
+  retainer uses the game's own function, found by pattern-matching the game code. A patch
+  moves that pattern. The search used to happen the first time you were actually standing at a
+  summoning bell — deep inside a Novus material restock — so a patch showed up as "it just
+  stopped taking things out of retainers" mid-run. The search now happens when the plugin
+  loads and says plainly whether it worked, what stops working if it did not, and how to fix
+  it. Nothing else changes: withdrawal still falls back to buying.
+- **The levemete's leve list checks its own layout before touching it.** The board is read at
+  fixed positions for the entry count, each leve's name, and the current selection. If a patch
+  shortens or renumbers that list, the plugin now stops and logs the live layout instead of
+  reading whichever value has moved into place — which also closes an out-of-bounds read of
+  the entry count. `/relic leveboard`, with a leve list open, dumps the layout on demand.
+
+### Fixed
+
+- **Tagged releases no longer depend on someone else's latest commit.** The release build
+  pulled ECommons from its default branch, so an upstream change could break a Relicable
+  version that had already shipped — most likely right after a game patch, when ECommons is
+  being updated hourly. It is pinned to an exact commit now.
+- **Releases are built against the Dalamud that players are actually running.** For the first
+  hours or days after a game patch, the stable Dalamud branch does not support the new client
+  at all — the working build is on staging. The release build always took stable, so anything
+  shipped in that window was compiled against a Dalamud nobody was running: it builds cleanly
+  and then misbehaves in game. It now asks Dalamud which branch supports the live client,
+  prefers stable whenever stable works, and refuses to build if the API level has moved out
+  from under the plugin.
+
 ## 1.5.3.1 — The run parked after the beastman hunt
 
 ### Fixed

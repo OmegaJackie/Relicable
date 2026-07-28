@@ -38,6 +38,17 @@ internal static unsafe class RetainerWithdraw
     // void (AgentRetainer item-command module, source slot, source container, a4=0, command).
     private static delegate* unmanaged<nint, uint, InventoryType, uint, long, void> _fn;
     private static bool _scanned;
+    private static string? _scanError;
+
+    // Force the signature scan at plugin load and log the outcome once.
+    //
+    // Left purely lazy, Resolve() only ran the first time a retainer item window was ALREADY
+    // open -- i.e. mid-run, deep inside a Novus material restock -- so a signature broken by a
+    // game patch surfaced as "the restock quietly stopped pulling from retainers" hours in,
+    // rather than as a version problem at load. Probing here turns that into one loud line
+    // before anything depends on it. A sig scan only reads the module image, so this is safe
+    // off the framework tick.
+    public static bool ProbeSignature() => Resolve() != null;
 
     private static readonly string[] ItemWindowAddons = { "InventoryRetainer", "InventoryRetainerLarge" };
 
@@ -118,14 +129,39 @@ internal static unsafe class RetainerWithdraw
         _scanned = true;
         try
         {
+            // ScanText throws when the pattern is absent, but do not rely on that alone:
+            // a zero address would otherwise be called as a function pointer.
             var addr = Plugin.SigScanner.ScanText(RetainerItemCommandSig);
-            _fn = (delegate* unmanaged<nint, uint, InventoryType, uint, long, void>)addr;
+            if (addr == 0)
+                _scanError = "pattern not found (scanner returned 0)";
+            else
+                _fn = (delegate* unmanaged<nint, uint, InventoryType, uint, long, void>)addr;
         }
         catch (Exception ex)
         {
-            DebugLog.Warn($"Retainer item-command signature scan failed (auto-fetch disabled): {ex.Message}");
+            _scanError = ex.Message;
             _fn = null;
         }
+        Report();
         return _fn;
+    }
+
+    // Said exactly once, on whichever path scans first (ProbeSignature at load, or a lazy
+    // first use). Warn, not Verbose, because DebugLog.Warn is the only level that emits with
+    // the debug toggle off -- a broken signature is a silent feature loss otherwise, and the
+    // message has to name the consequence AND the fix, since the fix lives in another repo.
+    private static void Report()
+    {
+        if (_fn != null)
+        {
+            DebugLog.Info("Retainer item-command signature resolved; retainer withdrawal available.");
+            return;
+        }
+        DebugLog.Warn(
+            "Retainer item-command signature did not resolve -- retainer withdrawal is DISABLED for this " +
+            "session, so the Novus material restock will not pull from retainers (it falls back to buying). " +
+            "This is the expected symptom of a game patch moving the function: re-copy the signature from " +
+            "AutoRetainer's Internal/Memory.cs." +
+            (_scanError is null ? string.Empty : $" Scanner said: {_scanError}"));
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using Dalamud.Memory;
 using ECommons.Automation;
 using ECommons.UIHelpers.AddonMasterImplementations;
@@ -34,6 +35,13 @@ internal static unsafe class LeveBoard
     private const int SelectedLeveIndex = 1233;
     private const int EntryNameStart = 626;   // name at 626 + i*2
     private const int SelectCallbackId = 13;
+
+    // The highest index the layout above reads, so a short array can be rejected before it is
+    // indexed. These numbers are hardcoded positions in a GAME UI array: a patch that touches
+    // the GuildLeve addon renumbers them, and there is no compile error for that.
+    private const int MinValues = SelectedLeveIndex + 1;   // 1234
+
+    private static bool _dumpedValues;
 
     // Outcome of one AcceptTarget tick, so the executor can distinguish "the accept
     // was fired and needs a server round-trip to register" from "this levemete does
@@ -121,6 +129,76 @@ internal static unsafe class LeveBoard
 
     public static bool BoardOpen() => Board() != null;
 
+    // True when the board's AtkValue array is at least as large as the layout we index into.
+    //
+    // Guards the two real hazards of a patch reshuffling this addon: the unchecked read at
+    // [NumEntriesIndex], which on a short array is out of bounds; and firing the selection
+    // callback with an entry index derived from a name read out of the wrong slot. Both
+    // consumers below bail on false, so the executor stalls and logs instead of accepting
+    // something unintended. Dumps once, so re-deriving the indices does not need a second
+    // in-game trip.
+    //
+    // NOTE: this catches renumbering that SHORTENS the array. A patch that keeps the array the
+    // same size but moves the meanings passes this check -- the symptom there is AcceptTarget
+    // returning NotOffered forever at a levemete that visibly offers the leve. Use
+    // "/relic leveboard" with the board open to dump the live layout in that case.
+    private static bool LayoutOk(AtkUnitBase* addon)
+    {
+        if (addon->AtkValuesCount >= MinValues)
+            return true;
+        if (!_dumpedValues) { _dumpedValues = true; DumpValues(addon); }
+        Diagnostics.DebugLog.Warn($"GuildLeve has {addon->AtkValuesCount} AtkValues (< {MinValues}); " +
+            "its layout differs from the expected one (a game patch renumbering the addon does this). " +
+            "See the dump above; leve accept is disabled until the indices are re-derived.");
+        return false;
+    }
+
+    // Public entry for "/relic leveboard": dump the open board's AtkValues on demand, for
+    // re-deriving the layout after a patch. Unconditional -- the caller asked for it.
+    public static void DumpLayout()
+    {
+        var addon = Board();
+        if (addon == null)
+        {
+            Diagnostics.DebugLog.Warn("GuildLeve board is not open; open a levemete's leve list first.");
+            return;
+        }
+        DumpValues(addon);
+    }
+
+    // Logs the board's AtkValues so the layout can be re-derived. Numbers are dumped for the
+    // low block that holds the entry count; strings are dumped WITH THEIR INDEX across the
+    // whole array, because the two things a re-derivation needs are "which index now holds an
+    // entry name" and "which one holds the current selection" -- and the array is ~1240 long,
+    // so dumping it whole is unreadable.
+    private static void DumpValues(AtkUnitBase* addon)
+    {
+        try
+        {
+            var n = (int)addon->AtkValuesCount;
+            var numTo = Math.Min(n, 40);
+            var sb = new StringBuilder($"GuildLeve {n} AtkValues; numbers [0..{numTo}): ");
+            for (var i = 0; i < numTo; i++)
+            {
+                ref var v = ref addon->AtkValues[i];
+                if (!IsString(v.Type))
+                    sb.Append('[').Append(i).Append(']').Append(v.Int).Append(' ');
+            }
+            sb.Append("| strings: ");
+            for (var i = 0; i < n; i++)
+            {
+                var s = ReadString(addon, i);
+                if (s.Length > 0)
+                    sb.Append('[').Append(i).Append("]\"").Append(s).Append("\" ");
+            }
+            Diagnostics.DebugLog.Warn(sb.ToString());
+        }
+        catch { /* diagnostic only */ }
+    }
+
+    private static bool IsString(AtkValueType t)
+        => t is AtkValueType.String or AtkValueType.ManagedString or AtkValueType.ConstString;
+
     // The names of every leve currently offered on the board, in order. Used to pick a filler
     // leve to cycle the battle-leve rotation when the target is not offered (battle leves are not
     // all shown at once; completing a different one in the category rotates the offered set).
@@ -128,7 +206,7 @@ internal static unsafe class LeveBoard
     {
         var result = new System.Collections.Generic.List<string>();
         var addon = Board();
-        if (addon == null)
+        if (addon == null || !LayoutOk(addon))
             return result;
 
         var count = (int)addon->AtkValues[NumEntriesIndex].UInt;
@@ -163,7 +241,7 @@ internal static unsafe class LeveBoard
     public static AcceptResult AcceptTarget(uint leveId)
     {
         var addon = Board();
-        if (addon == null)
+        if (addon == null || !LayoutOk(addon))
             return AcceptResult.NotReady;
 
         var name = Data.Sheets.LeveName(leveId);

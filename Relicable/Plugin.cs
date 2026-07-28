@@ -252,6 +252,11 @@ public sealed class Plugin : IDalamudPlugin
             HelpMessage = "Open the Relicable window. Subcommands: config, novus, braves, questmap, start, stop, reload.",
         });
 
+        // Resolve the one native signature this plugin sig-scans (the retainer item command)
+        // NOW, so a game patch that moved it is one line in the log at load rather than a
+        // feature that silently does nothing hours into a Novus restock. Never throws.
+        Steps.RetainerWithdraw.ProbeSignature();
+
         Framework.Update += OnUpdate;
     }
 
@@ -413,6 +418,7 @@ public sealed class Plugin : IDalamudPlugin
     // The set of undocumented diagnostic subcommands, matched before the user-facing switch.
     private static bool IsDiagnosticCommand(string lower)
         => lower is "adcfg" or "bravesseq" or "prereq" or "questwork" or "quests" or "mahatma"
+                 or "leveboard"
            || lower.StartsWith("adset ");
 
     // Diagnostic dispatch. Only called once EnableDebugLog has been verified, so every report
@@ -456,6 +462,13 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "mahatma":
                 Steps.GameState.LogMahatmaDebug();
+                break;
+            case "leveboard":
+                // Dump the open GuildLeve board's AtkValue layout. The board is driven by
+                // hardcoded indices (entry count, entry names, current selection) that a game
+                // patch can renumber without any compile error, so this is the tool for
+                // re-deriving them: open a levemete's leve list, then run this.
+                Steps.Interaction.LeveBoard.DumpLayout();
                 break;
         }
     }
