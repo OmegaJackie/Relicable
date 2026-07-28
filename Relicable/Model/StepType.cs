@@ -42,4 +42,17 @@ public enum StepType
     // NOTE: a new member here MUST also be registered in Plugin.cs's executor list, or the
     // controller throws "No executor registered" the moment the step runs.
     InteractObject,
+
+    // Zenith step 1: put the Thavnairian Mist the Furnace trade costs in the bags -- count the
+    // bags, refuse to double-buy what a retainer is holding, then buy the shortfall from Auriana
+    // at Revenant's Toll (the relic materials sit under her "Special Arms" exchange, not the
+    // default gear grid). Skips the trip entirely when the mist is already held.
+    // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
+    AcquireZenithMist,
+
+    // Zenith step 2: trade the finished bare base relic + its mist at the Furnace beside Gerolt
+    // (Hyrstmill, North Shroud) for the il90 "<weapon> Zenith" form. One trade per weapon -- the
+    // Paladin's Curtana and Holy Shield are two separate entries.
+    // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
+    ZenithTrade,
 }

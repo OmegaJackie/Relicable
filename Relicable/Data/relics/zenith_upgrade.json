@@ -1,0 +1,33 @@
+{
+  // Zenith: the il90 upgrade sitting between the finished base relic and the Atma stage. A pure
+  // ITEM gate -- no quest, no unlock -- in two steps:
+  //   1. AcquireZenithMist: count the Thavnairian Mist in the bags, refuse to double-buy what a
+  //      retainer is already holding, and buy the shortfall from Auriana at Revenant's Toll (Mor
+  //      Dhona). Skipped entirely when the mist is already on you, so a stocked player goes
+  //      straight to the Furnace.
+  //   2. ZenithTrade: trade the bare relic + its mist at the Furnace beside Gerolt (Hyrstmill,
+  //      North Shroud), then equip the "<weapon> Zenith" the trade hands back. One trade per
+  //      weapon: every solo main hand costs 3 mists, and the Paladin's Curtana (2) + Holy Shield
+  //      (1) are two separate entries that both have to happen.
+  //
+  // STAGE IS ATMA, NOT RELIC, on purpose. Auto filters the pool to stages ABOVE the completed one,
+  // and a bare base relic already reads RelicStage.Relic -- a Relic-stage objective could never
+  // survive that filter. Its ZenithTraded priority (3) sorts it ahead of the 12 atma ItemCount
+  // farms (4), which is the right order anyway: the atma FATE farm only counts with the Zenith
+  // weapon equipped, so nothing at this stage can progress until the trade is done. The controller
+  // also selects this objective explicitly while EquippedNeedsZenith holds, and drops it from the
+  // Atma pool once it does not.
+  //
+  // Completion is read off the EQUIPPED weapon's item id (ZenithTraded), not "no bare relic held":
+  // the trade needs the weapon unequipped, so a held-based check would read complete mid-flow, and
+  // an alt job's parked base relic in the armoury would block it forever.
+  "stage": "Atma",
+  "book": 0,
+  "id": "zenith-upgrade",
+  "displayName": "Zenith upgrade: Thavnairian Mist, then the Furnace (Hyrstmill)",
+  "steps": [
+    { "type": "AcquireZenithMist" },
+    { "type": "ZenithTrade" }
+  ],
+  "completion": { "kind": "ZenithTraded" }
+}

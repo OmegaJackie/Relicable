@@ -40,6 +40,16 @@ public static class RelicWeaponStages
     // enhancement. Kept apart from the bare ids because the Atma turn-in consumes THIS form
     // (not the bare relic), and the menu must pick it by name from the bags (it is unequipped).
     private static readonly HashSet<uint> ZenithFormIds = new();
+    // bare base relic id -> the "<base> Zenith" id its Furnace trade hands back. The Zenith trade
+    // is driven by picking the shop row that YIELDS this item, so the automation never fires at a
+    // row it cannot positively identify.
+    private static readonly Dictionary<uint, uint> ZenithFormByBareId = new();
+    // relic weapon item id -> the job whose line it belongs to, for EVERY tier of that job's
+    // weapon (base, Unfinished, Zenith, Atma, Animus, Novus, Nexus). A relic can only be equipped
+    // by its own job, so the auto-equip has to know which one it is holding: picking the first
+    // relic in the armoury regardless of job means trying to equip another job's weapon, which the
+    // game silently refuses -- and then the hunt runs with no relic on and the kills do not credit.
+    private static readonly Dictionary<uint, RelicJob> JobByItemId = new();
     private static bool _resolved;
     private static long _lastResolveAttemptTicks;
     // Retry cadence while the stage map is still empty. Ensure() no longer latches BEFORE the work
@@ -93,6 +103,15 @@ public static class RelicWeaponStages
         return ZenithFormIds.Contains(itemId);
     }
 
+    // The "<base> Zenith" weapon a bare base relic's Furnace trade yields, or 0 when the id is not
+    // a bare base relic (or its Zenith form did not resolve). The Zenith trade uses this to find
+    // its row in the Furnace's shop BY RESULT, so it can never pick a neighbouring job's trade.
+    public static uint ZenithFormFor(uint bareItemId)
+    {
+        Ensure();
+        return ZenithFormByBareId.TryGetValue(bareItemId, out var id) ? id : 0u;
+    }
+
     private static void Ensure()
     {
         if (_resolved)
@@ -119,8 +138,22 @@ public static class RelicWeaponStages
             }
 
             var unresolved = new List<string>();
-            foreach (var (baseName, mistCost) in BaseWeaponNames())
+            foreach (var (baseName, mistCost, owningJob) in BaseWeaponNames())
             {
+                // Every form of this weapon belongs to the one job that can equip it.
+                void NoteJob(string name)
+                {
+                    if (owningJob != RelicJob.None
+                        && itemsByName.TryGetValue(Key(name), out var jid) && jid != 0)
+                        JobByItemId[jid] = owningJob;
+                }
+                NoteJob(baseName);
+                NoteJob("Unfinished " + baseName);
+                NoteJob("Unfinished " + StripThe(baseName));
+                NoteJob($"{baseName} Zenith");
+                foreach (var (suffix, _) in Tiers)
+                    NoteJob($"{baseName} {suffix}");
+
                 // The base 2-star relic (il80), its "Unfinished" form (equipped during
                 // 'A Relic Reborn' for the beastman hunt and the unfinished-relic trials),
                 // and Zenith (il90; the enum has no separate Zenith) all count as the Relic
@@ -136,9 +169,14 @@ public static class RelicWeaponStages
                 // unfinished version, so a miss is expected data, not a gap -> do not warn.
                 MapOptional(itemsByName, RelicStage.Relic, "Unfinished " + baseName, "Unfinished " + StripThe(baseName));
                 MapFirst(itemsByName, RelicStage.Relic, unresolved, $"{baseName} Zenith");
-                // Remember the Zenith form's id (the Atma turn-in item, picked by name at Jalzahn).
+                // Remember the Zenith form's id (the Atma turn-in item, picked by name at Jalzahn),
+                // and which bare relic's Furnace trade produces it (the Zenith trade's row match).
                 if (itemsByName.TryGetValue(Key($"{baseName} Zenith"), out var zenId) && zenId != 0)
+                {
                     ZenithFormIds.Add(zenId);
+                    if (itemsByName.TryGetValue(Key(baseName), out var bare) && bare != 0)
+                        ZenithFormByBareId[bare] = zenId;
+                }
 
                 foreach (var (suffix, stage) in Tiers)
                     MapFirst(itemsByName, stage, unresolved, $"{baseName} {suffix}");
@@ -168,17 +206,28 @@ public static class RelicWeaponStages
     // 1769484): a solo main hand costs 3; a main hand WITH a secondary reward splits the
     // set's 3 mists across two trades, 2 for the main hand and 1 for the off-hand (the
     // Paladin's Curtana + Holy Shield -- the only such pair in the data).
-    private static IEnumerable<(string Name, int MistCost)> BaseWeaponNames()
+    private static IEnumerable<(string Name, int MistCost, RelicJob Job)> BaseWeaponNames()
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var data in BaseRelicData.ByJob.Values)
+        foreach (var kv in BaseRelicData.ByJob)
         {
+            var (job, data) = (kv.Key, kv.Value);
             var hasSecondary = !string.IsNullOrEmpty(data.SecondaryRewardName);
             if (!string.IsNullOrEmpty(data.RelicWeaponName) && names.Add(data.RelicWeaponName))
-                yield return (data.RelicWeaponName, hasSecondary ? 2 : 3);
+                yield return (data.RelicWeaponName, hasSecondary ? 2 : 3, job);
             if (!string.IsNullOrEmpty(data.SecondaryRewardName) && names.Add(data.SecondaryRewardName))
-                yield return (data.SecondaryRewardName, 1);
+                yield return (data.SecondaryRewardName, 1, job);
         }
+    }
+
+    // The job whose relic line an item id belongs to, or None when the id is not a name-derived
+    // relic weapon (the il125 Braves and il135 Zeta finals carry unique names and are recognized
+    // from GameState's own id tables, so they are not job-mapped here). Used by the auto-equip so
+    // it never tries to put another job's relic in your hands.
+    public static RelicJob JobOf(uint itemId)
+    {
+        Ensure();
+        return JobByItemId.TryGetValue(itemId, out var j) ? j : RelicJob.None;
     }
 
     // Map the first candidate name that resolves in the Item sheet to the given stage;

@@ -98,7 +98,18 @@ public static class BaseRelicHuntGenerator
             // own equip step as a backstop for a player who starts mid-hunt.
             AddGeroltTurnIn(result, job, 9, "deliver the hero's tome copy, equip the unfinished relic",
                 equipRelicAfter: true);
-            AddGeroltTurnIn(result, job, 11, "report the beastman hunt");
+            // Sequence 11 reports the beastman hunt -- and Gerolt WANTS THE WEAPON BACK to look at
+            // it, so this is a hand-over, not the pure conversation the sequence map reads like. A
+            // hand-over UI never lists an EQUIPPED item, and the hunt at sequence 10 necessarily
+            // ends with the unfinished relic in your hands (its kills only credit while it is on),
+            // so without taking it off first the turn-in offers nothing and the run parks at 11.
+            // Reported live, straight off the beastman hunt.
+            //
+            // Costs nothing if Gerolt turns out not to take it: UnequipRelicFirst puts back
+            // anything the conversation did not consume (InteractNpcExecutor.RestoreRelicWeapons),
+            // and the Hydra at sequence 12 -- the only trial fought with the relic equipped -- adds
+            // its own EnsureRelicEquipped step regardless.
+            AddGeroltTurnIn(result, job, 11, "report the beastman hunt", unequipRelicFirst: true);
             AddGeroltTurnIn(result, job, 13, "report the Hydra");
             // Sequence 14 hands the unfinished relic BACK to Gerolt, and the hand-over UI does not
             // list equipped items -- so it has to come off first (StepData.UnequipRelicFirst, which
