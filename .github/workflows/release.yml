@@ -211,8 +211,7 @@ jobs:
           # ECommons references these by name; a distrib reshuffle that drops one would
           # otherwise resurface as a wall of CS0246 deep inside ECommons. Name the missing
           # file here instead.
-          # (The full HintPath set from ECommons.csproj - tools/sync-dalamud-libs.ps1 checks
-          # the same list locally.)
+          # (The full HintPath set from ECommons.csproj.)
           foreach ($required in @(
             'Dalamud.dll','Dalamud.Common.dll','Dalamud.Bindings.ImGui.dll',
             'Dalamud.Bindings.ImPlot.dll','Dalamud.Bindings.ImGuizmo.dll',
