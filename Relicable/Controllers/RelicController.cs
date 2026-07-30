@@ -1058,9 +1058,12 @@ public sealed class RelicController
         var parts = new List<string>();
         foreach (var name in Data.BravesData.MaterialQuests)
         {
-            if (GameState.QuestSequence(Data.BravesData.MaterialQuestId(name)) <= 0)
+            var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
+            if (seq <= 0)
                 continue; // only quests currently accepted
-            var (npc, _, _, _, where) = Data.BravesData.TurnInNpc(name);
+            // Sequence-aware: who advances a quest depends on where it is (A Treasured Mother reports
+            // to Ealdwine at Swiftperch between batches, Brangwine only for the final turn-in).
+            var (npc, _, _, _, where) = Data.BravesData.TurnInNpc(name, seq);
             if (!string.IsNullOrEmpty(npc))
                 parts.Add($"{name} -> {npc} ({where})");
         }
@@ -1078,7 +1081,7 @@ public sealed class RelicController
         {
             if (GameState.QuestSequence(Data.BravesData.MaterialQuestId(name)) is var seq && seq <= 0)
                 continue; // not accepted
-            if (Data.BravesData.TurnInNpc(name).DataId == 0)
+            if (Data.BravesData.TurnInNpc(name, seq).DataId == 0)
                 continue; // NPC did not resolve
             var hasHeldDrop = false;
             foreach (var m in Data.BravesData.Materials)
@@ -1107,7 +1110,7 @@ public sealed class RelicController
             Stage = RelicStage.Braves,
             BravesQuest = quest,
             Id = $"braves-report-{quest}-{seq}",
-            DisplayName = $"Braves ({quest}): report to {Data.BravesData.TurnInNpc(quest).Npc} to advance the quest",
+            DisplayName = $"Braves ({quest}): report to {Data.BravesData.TurnInNpc(quest, seq).Npc} to advance the quest",
             Steps = new List<StepData> { new() { Type = StepType.BravesReport } },
             Completion = new CompletionCondition { Kind = CompletionKind.AllStepsDone },
         };

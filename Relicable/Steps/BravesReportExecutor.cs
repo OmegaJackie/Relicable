@@ -60,11 +60,14 @@ public sealed class BravesReportExecutor : ITaskExecutor
 
         _quest = ctx.CurrentObjective?.BravesQuest ?? string.Empty;
         _questId = BravesData.MaterialQuestId(_quest);
-        var (_, dataId, territory, pos, _) = BravesData.TurnInNpc(_quest);
+        // Resolve the sequence FIRST: which NPC a quest wants depends on where it is. A Treasured
+        // Mother reports to Ealdwine at Swiftperch between batches and only returns to Brangwine for
+        // the final turn-in, so a sequence-blind lookup sends the whole trip to the wrong zone.
+        _startSeq = _questId == 0 ? 0 : GameState.QuestSequence(_questId);
+        var (_, dataId, territory, pos, _) = BravesData.TurnInNpc(_quest, _startSeq);
         _npcDataId = dataId;
         _npcPos = pos;
         _territory = territory;
-        _startSeq = _questId == 0 ? 0 : GameState.QuestSequence(_questId);
 
         // Not a known/accepted quest, or the NPC did not resolve -> nothing to do; the controller re-plans.
         if (_questId == 0 || _npcDataId == 0 || _startSeq <= 0)
@@ -81,7 +84,11 @@ public sealed class BravesReportExecutor : ITaskExecutor
 
     private Phase StartTrip(ExecutionContext ctx)
     {
-        var aeth = Locations.AetheryteForTerritory(_territory);
+        // Nearest aetheryte to the NPC, not merely one in the zone: Western La Noscea has two and
+        // Ealdwine stands at Swiftperch, so a zone-level pick can drop you at Aleport and walk it.
+        var aeth = Locations.NearestAetheryteToWorld(_territory, Locations.MapForTerritory(_territory), _npcPos)
+                       ?.AetheryteId
+                   ?? Locations.AetheryteForTerritory(_territory);
         if (aeth != 0)
         {
             _teleStep = new StepData { Type = StepType.AetheryteTeleport, AetheryteId = aeth };
@@ -210,7 +217,7 @@ public sealed class BravesReportExecutor : ITaskExecutor
         return false;
     }
 
-    private string NpcName() => BravesData.TurnInNpc(_quest).Npc is { Length: > 0 } n ? n : "the quest";
+    private string NpcName() => BravesData.TurnInNpc(_quest, _startSeq).Npc is { Length: > 0 } n ? n : "the quest";
 
     public void Stop(ExecutionContext ctx)
     {

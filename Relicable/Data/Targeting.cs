@@ -118,7 +118,10 @@ public sealed class Targeting
     // mobs are found while we are still at the ring edge or landed just short of a slightly-off
     // authored spawn point. The IsInFate/CurrentFate path returned nothing there, which left the
     // character hard-targeting nothing and "not auto starting the attack" (the reported symptom).
-    public IGameObject? NearestHostileInFate(ushort fateId)
+    // avoidId: a mob the caller judged unreachable (it could not close on it), skipped for a
+    // cooldown so the approach picks a different FATE mob -- or falls back to the ring centre --
+    // instead of pathing at an unreachable one forever. Same escape the kill grind's _stuckId gives.
+    public IGameObject? NearestHostileInFate(ushort fateId, ulong avoidId = 0)
     {
         if (fateId == 0)
             return null;
@@ -127,6 +130,7 @@ public sealed class Targeting
             .Where(o => o.ObjectKind == ObjectKind.BattleNpc)
             .Where(IsAttackable)
             .Where(o => MobFateId(o) == fateId)
+            .Where(o => avoidId == 0 || o.GameObjectId != avoidId)
             // HOSTILE only. FATE membership (MobFateId) is NOT the same as being an enemy: boss/defense
             // FATEs spawn FRIENDLY allied NPCs that the FATE director tags with the same FateId and that
             // pass IsAttackable (Combatant sub-kind, targetable, alive). "Tower of Power" (fate 486) is
@@ -141,10 +145,14 @@ public sealed class Targeting
             .FirstOrDefault();
     }
 
-    // Hard-target the nearest mob belonging to a specific fate (see NearestHostileInFate).
-    public bool EngageNearestHostileInFate(ushort fateId)
+    // Hard-target the nearest mob belonging to a specific fate (see NearestHostileInFate). avoidId
+    // must be passed the SAME blacklist the approach uses: a mob the approach gave up on as
+    // unreachable is exactly the one that must not then be hard-targeted here just because it is
+    // nearest in 3D (a mob hovering above us is close but unhittable), which would put us straight
+    // back in the stuck state the blacklist exists to escape.
+    public bool EngageNearestHostileInFate(ushort fateId, ulong avoidId = 0)
     {
-        var t = NearestHostileInFate(fateId);
+        var t = NearestHostileInFate(fateId, avoidId);
         if (t == null)
             return false;
         _provider.SetTarget(t);
@@ -186,13 +194,20 @@ public sealed class Targeting
     // escort flow, which targets the friendly hound to /beckon it rather than to fight.
     public void SetTarget(IGameObject obj) => _provider.SetTarget(obj);
 
-    // Nearest attackable enemy currently targeting the player -- an add that has
-    // aggroed onto us during a kill. RSR Manual mode only acts on the target we set, so
-    // a non-targeted enemy that aggroes is otherwise ignored while we tunnel the (often
-    // neutral) relic mob. excludeId skips the intended relic target, which is itself
-    // "targeting us" once pulled, so it is not mistaken for an add. Returns null when
-    // nothing is attacking us.
-    public IGameObject? FindNearestAggressor(ulong playerId, ulong excludeId)
+    // Nearest attackable enemy currently attacking us -- an add that has aggroed onto us
+    // during a kill. RSR Manual mode only acts on the target we set, so a non-targeted enemy
+    // that aggroes is otherwise ignored while we tunnel the (often neutral) relic mob.
+    // excludeId skips the intended relic target, which is itself "targeting us" once pulled,
+    // so it is not mistaken for an add. Returns null when nothing is attacking us.
+    //
+    // allyId: the player's summoned chocobo (0 = none). Enmity that has FLIPPED onto the
+    // companion still means an enemy is engaged with us, and the healer-stance chocobo
+    // out-threats the player during any window where the plugin deals no damage (a multi-second
+    // LandAndDismount, post-kill travel with the rotation off). Without this the mob became
+    // invisible to both callers the moment its target changed, and the kill loop fell through to
+    // the travel branch -- which disables the rotation and keeps navigating -- so the character
+    // walked away from a live fight and never returned fire.
+    public IGameObject? FindNearestAggressor(ulong playerId, ulong excludeId, ulong allyId = 0)
     {
         if (playerId == 0)
             return null;
@@ -201,8 +216,16 @@ public sealed class Targeting
         return _provider.Objects
             .Where(o => o.ObjectKind == ObjectKind.BattleNpc)
             .Where(IsAttackable)
+            // HOSTILE only, the same nameplate-colour guard every other finder in this file
+            // applies (NearestHostile, NearestHostileInFate, FindNearestLeveObjective). Friendly
+            // ALLIED combatants pass IsAttackable, and an ally NPC healer TARGETS the player to
+            // heal them -- so without this an ally was returned as "the aggressor" and hard-
+            // targeted every tick while the enemy actually hitting us was never engaged. The
+            // engage branch made that self-sustaining: the relic mob is excluded by excludeId,
+            // so the friendly stayed the nearest match and stole the target on every Update.
+            .Where(o => o.IsHostile())
             .Where(o => o.GameObjectId != excludeId)
-            .Where(o => o.TargetObjectId == playerId)
+            .Where(o => o.TargetObjectId == playerId || (allyId != 0 && o.TargetObjectId == allyId))
             .OrderBy(o => Vector3.DistanceSquared(me, o.Position))
             .FirstOrDefault();
     }
@@ -210,9 +233,9 @@ public sealed class Targeting
     // Target the nearest add attacking the player (excluding the relic target). Returns
     // true when an aggressor was found and set as the hard target, so the caller can
     // let RSR fight it before resuming the relic mob.
-    public bool EngageAggressor(ulong playerId, ulong excludeId)
+    public bool EngageAggressor(ulong playerId, ulong excludeId, ulong allyId = 0)
     {
-        var a = FindNearestAggressor(playerId, excludeId);
+        var a = FindNearestAggressor(playerId, excludeId, allyId);
         if (a == null)
             return false;
         _provider.SetTarget(a);

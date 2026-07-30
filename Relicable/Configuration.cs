@@ -342,6 +342,20 @@ public sealed class Configuration : IPluginConfiguration
     // so the Atma tracker can show which atmas sit on a retainer as well as in your bags.
     public RetainerItemCache RetainerAtmas { get; set; } = new();
 
+    // Braves (il125) shopping-list materials scanned from each retainer's inventory, by the
+    // same native-bell scan. Lets the Braves planner show a "Retainer" count per row offline
+    // and tell you which retainer to open before a fetch. Key-item dungeon drops are never in
+    // here -- they cannot be entrusted to a retainer at all.
+    public RetainerItemCache RetainerBravesItems { get; set; } = new();
+
+    // Every relic upgrade swaps the weapon for a new item id, which leaves the gear set you use
+    // naming a weapon that no longer exists -- so the next "/gearset change" comes up with an empty
+    // main hand (and no Holy Shield on a Paladin). When on, Relicable rewrites the ACTIVE gear set
+    // after an upgrade so it names the current relic. It only ever does so when the set is for the
+    // job you are on and every non-weapon slot already matches, so the write can change nothing but
+    // the weapon. Turn off to manage your own sets. See RelicGearsetSync.
+    public bool SyncGearsetToLatestRelic { get; set; } = true;
+
     // Companion toggles
     public bool EnableNavmesh { get; set; } = true;
     public bool AllowFlight { get; set; } = true;

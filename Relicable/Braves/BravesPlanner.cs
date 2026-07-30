@@ -17,8 +17,18 @@ public sealed class BravesLine
     public uint ItemId { get; init; }
     public int Have { get; init; }
     public int Need { get; init; }
+
+    // How many sit on retainers, from the cached bell scan (Configuration.RetainerBravesItems).
+    // A snapshot, not a live read: it is what the last visit to each retainer saw. Always 0 for
+    // the key-item dungeon drops, which cannot be entrusted to a retainer.
+    public int OnRetainers { get; init; }
+
     public long? UnitMarket { get; init; }
     public long? LineMarket => UnitMarket.HasValue ? UnitMarket.Value * Need : null;
+
+    // This row can be pulled out of a retainer: a real Item-sheet id, still short, and the
+    // cache last saw at least one on a retainer.
+    public bool Fetchable => ItemId != 0 && Need > 0 && OnRetainers > 0;
 }
 
 // The fully costed Braves plan. Mirrors the Novus route's "grand total" idea: a single
@@ -42,6 +52,10 @@ public sealed class BravesPlan
 
     public int DungeonDropsToFarm { get; init; }
     public int Craftables { get; init; }
+
+    // Distinct still-needed materials the retainer cache last saw on a retainer, i.e. how many
+    // rows "Fetch all from retainers" would go after.
+    public int FetchableLines { get; init; }
 
     // Tradable-looking lines with no current listing (so the market total understates).
     public int Unpriced { get; init; }
@@ -91,7 +105,7 @@ public sealed class BravesPlanner
     {
         var lines = new List<BravesLine>();
         long marketListed = 0, vendorGil = 0, desynthGil = 0, seals = 0, poetics = 0;
-        int dungeon = 0, craft = 0, unpriced = 0;
+        int dungeon = 0, craft = 0, unpriced = 0, fetchable = 0;
         var ready = _universalis.State == UniversalisClient.FetchState.Loaded;
 
         foreach (var m in BravesData.Materials)
@@ -115,11 +129,21 @@ public sealed class BravesPlanner
                     ? _universalis.UnitPriceHq(id) ?? _universalis.UnitPrice(id)
                     : _universalis.UnitPrice(id);
 
-            var line = new BravesLine { Material = m, ItemId = id, Have = have, Need = need, UnitMarket = unit };
+            // Retainer stock comes from the cached bell scan. Key items (the dungeon drops)
+            // resolve to no Item id and can never be on a retainer, so they stay at 0.
+            var onRetainers = id != 0 ? _config.RetainerBravesItems.TotalFor(id) : 0;
+
+            var line = new BravesLine
+            {
+                Material = m, ItemId = id, Have = have, Need = need,
+                OnRetainers = onRetainers, UnitMarket = unit,
+            };
             lines.Add(line);
 
             if (need <= 0)
                 continue;
+            if (line.Fetchable)
+                fetchable++;
 
             // Each item contributes to the headline gil total exactly once, via the
             // intended gil path: the 100,000-gil zone items at vendor price; the
@@ -175,6 +199,7 @@ public sealed class BravesPlanner
             Poetics = poetics,
             DungeonDropsToFarm = dungeon,
             Craftables = craft,
+            FetchableLines = fetchable,
             Unpriced = unpriced,
             PricesReady = ready,
         };

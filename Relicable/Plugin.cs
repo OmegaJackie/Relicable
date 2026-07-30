@@ -46,6 +46,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly External.UniversalisClient _bravesUniversalis;
     private readonly Novus.RetainerScanner _retainerScanner;
     private readonly Novus.NovusActionRunner _novusRunner;
+    private readonly Steps.RetainerFetchRunner _bravesFetch;
     private readonly BaseRelic.PrerequisiteChecker _prereqChecker;
     private readonly BaseRelicWindow _baseRelicWindow;
     private readonly External.AutoDutyIpc _autoDuty;
@@ -205,7 +206,11 @@ public sealed class Plugin : IDalamudPlugin
         // contend with the Novus planner's price cache. Artisan is optional (best-effort).
         var bravesPlanner = new Braves.BravesPlanner(_config, _bravesUniversalis);
         var artisan = new ArtisanIpc(PluginInterface);
-        _bravesWindow = new BravesWindow(_config, bravesPlanner, artisan, () => PluginInterface.SavePluginConfig(_config));
+        // Its own retainer-fetch engine (the Novus panel has one too); the engine itself makes
+        // sure only one of them drives the summoning bell at a time.
+        _bravesFetch = new Steps.RetainerFetchRunner(_config, "Braves", autoRetainer);
+        _bravesWindow = new BravesWindow(_config, bravesPlanner, artisan, _bravesFetch,
+            () => PluginInterface.SavePluginConfig(_config));
 
         // Artisan crafting LISTS (the base relic's class-weapon step). Artisan registers no
         // create-a-list IPC gate, so this drives its own public list API in the loaded assembly;
@@ -345,8 +350,14 @@ public sealed class Plugin : IDalamudPlugin
         // automation is running, so the Novus planner always has fresh stock data.
         _retainerScanner.Tick();
         // The Novus popout actions (Infuse / Fetch) run independently of the main
-        // controller, so tick them here too.
+        // controller, so tick them here too -- as does the Braves planner's retainer fetch
+        // (its window only draws while open, so it cannot drive its own runner).
         _novusRunner.Tick();
+        _bravesFetch.Tick();
+        // Keep the active gear set naming the CURRENT relic: an upgrade replaces the weapon's item
+        // id, which silently leaves the set pointing at one that no longer exists. Polled here (not
+        // driven from the upgrade steps) so a manual upgrade at Jalzahn is covered too.
+        Steps.RelicGearsetSync.Tick(_config);
         // Swap RSR to the Ifrit EX burst rotation while in the Bowl of Embers (Extreme), and
         // restore the user's own choice on the way out. Polled (not event-driven) so re-entries
         // and duplicate zone events converge instead of re-running a handler.
@@ -511,6 +522,11 @@ public sealed class Plugin : IDalamudPlugin
         // breadcrumb is what gets persisted.
         _burstRotationSwap.Restore();
         _controller.Stop();
+        // A retainer fetch holds an AutoRetainer suppression for as long as it runs, and only its
+        // Stop restores it -- unloading mid-fetch would otherwise leave AutoRetainer paused with
+        // nothing left to un-pause it.
+        _novusRunner.Stop("Plugin unloading.");
+        _bravesFetch.Stop("Plugin unloading.");
         // Hand Wrath Combo's Auto-Rotation settings back to the user. Without this our
         // lease keeps the settings it took over locked, with Relicable still named as
         // their owner in Wrath's own window.

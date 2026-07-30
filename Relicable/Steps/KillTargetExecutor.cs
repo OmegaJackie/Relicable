@@ -15,17 +15,14 @@ public sealed class KillTargetExecutor : ITaskExecutor
 {
     public StepType Handles => StepType.KillTarget;
 
-    // Distance (yalms) at which we stop navigating and hand off to the rotation.
-    // Tight enough that melee jobs are in range, loose enough to absorb pathing
-    // overshoot and mob movement.
-    private const float EngageRange = 4f;
-
-    // Hysteresis: once engaged, keep fighting until the mob is beyond this looser range.
-    // A single EngageRange threshold made a mob that wobbles around 4y flip between the
-    // engage branch (RSR TargetOnly) and the travel branch (RSR Off) every tick -- the
-    // Off/On thrash that stops RSR ever settling into its rotation, so it "engages but
-    // never attacks". Only a mob that genuinely moved away re-enters the mount/close branch.
-    private const float DisengageRange = 8f;
+    // Distance (yalms) at which we stop navigating and hand off to the rotation, and the looser
+    // band an already-engaged mob may drift to before we chase it. Both come from
+    // Combat.EngageBand, which sizes them to the TARGET'S HITBOX and to whether the active job
+    // fights in melee or at range -- the flat 4y that used to live here was measured centre to
+    // centre, so a large mob's hull kept the character permanently "not in melee range" of
+    // something it was standing on top of. See EngageBand for the full reasoning.
+    private static float EngageRangeFor(IGameObject? target) => Combat.EngageBand.Engage(target);
+    private static float StopRangeFor(IGameObject? target) => Combat.EngageBand.Stop(target);
 
     // While flying in, start landing once this close HORIZONTALLY to the mob. The 3D
     // distance stays large while airborne (altitude), which otherwise defers the descent
@@ -290,11 +287,9 @@ public sealed class KillTargetExecutor : ITaskExecutor
         // retaliate nor target the attacker. Ground first (RSR cannot act while
         // mounted or airborne), then target the threat and run RSR in Manual mode.
         // Travel resumes automatically once combat ends.
-        if (Plugin.Condition[ConditionFlag.InCombat] && !(haveTarget && mobDist <= EngageRange))
+        if (Plugin.Condition[ConditionFlag.InCombat]
+            && !(haveTarget && mobDist <= EngageRangeFor(Plugin.TargetManager.Target)))
         {
-            // Combat pauses the approach; keep the stall clock fresh so a long add fight does not
-            // false-declare the (still far) relic mob unreachable the moment combat ends.
-            _lockProgressAt = System.Environment.TickCount64;
             if (!Combat.Mount.IsGrounded())
             {
                 ctx.Navmesh.Stop();
@@ -312,17 +307,25 @@ public sealed class KillTargetExecutor : ITaskExecutor
             // The rotation stays on while closing so a ranged job still fires en route.
             var defenderId = Plugin.ObjectTable.LocalPlayer?.GameObjectId ?? 0;
             var relicId = haveTarget ? (Plugin.TargetManager.Target?.GameObjectId ?? 0) : 0;
-            if (ctx.Targeting.EngageAggressor(defenderId, relicId))
+            if (ctx.Targeting.EngageAggressor(defenderId, relicId, Combat.Companion.CompanionId()))
             {
+                // A real ADD fight pauses the approach, so keep the stall clock fresh -- but ONLY
+                // here. Refreshing it for every in-combat tick (it used to sit at the top of this
+                // branch) made the unreachable-mob guard below permanently unreachable: an aggressor
+                // that sustains combat from beyond DisengageRange -- a ranged mob plinking us across
+                // a gap the navmesh cannot close -- pinned us in the travel branch, which disables
+                // the rotation every tick, and the 12s blacklist that would have moved us on to a
+                // reachable mob never ran.
+                _lockProgressAt = System.Environment.TickCount64;
                 MarkTarget(ctx);
                 ctx.Rotation.EnableManual();
                 Combat.CombatAssist.Engage(ctx);
                 var self = Plugin.ObjectTable.LocalPlayer?.Position ?? mobPos;
                 var add = Plugin.TargetManager.Target;
-                if (add != null && Vector3.Distance(self, add.Position) > EngageRange)
+                if (add != null && Vector3.Distance(self, add.Position) > EngageRangeFor(add))
                 {
-                    Log("add aggroed at range; closing to reach it while fighting");
-                    ctx.Navmesh.MoveCloseTo(add.Position, false, EngageRange - 1f);
+                    Log($"add aggroed at range; closing to reach it while fighting ({Combat.EngageBand.RoleLabel()})");
+                    ctx.Navmesh.MoveCloseTo(add.Position, false, StopRangeFor(add));
                 }
                 else
                 {
@@ -368,7 +371,9 @@ public sealed class KillTargetExecutor : ITaskExecutor
             // Hysteresis: once committed to a mob, keep fighting it while it stays within the
             // looser DisengageRange, so a mob wobbling around EngageRange does not flip between
             // this engage branch and the travel branch every tick and thrash RSR Off/On.
-            var engageBand = _engaging ? DisengageRange : EngageRange;
+            var engageBand = _engaging
+                ? Combat.EngageBand.Disengage(Plugin.TargetManager.Target)
+                : EngageRangeFor(Plugin.TargetManager.Target);
             if (mobDist <= engageBand)
             {
                 // The mob is reachable. Before casting, the character must be fully
@@ -393,33 +398,6 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 if (targetFateId != 0)
                     SyncToFateTarget(targetFateId);
 
-                // Stand and fight when in melee. If the mob has only drifted a little past melee
-                // (still inside the band), chase it ON FOOT but KEEP RSR enabled -- do NOT disable
-                // it for a small correction, which is exactly what produced the Off/On thrash.
-                if (mobDist > EngageRange)
-                {
-                    Log($"mob drifted to {mobDist:F1}y; closing on foot while engaged");
-                    ctx.Navmesh.MoveCloseTo(mobPos, false, EngageRange - 1f);
-                }
-                else if (!HasLineOfSight(self, mobPos))
-                {
-                    // In melee range, but terrain blocks the line of sight to the mob (we landed under a
-                    // ledge / on a lower tier -- LandAndDismount descends to the floor BELOW the mob). The
-                    // rotation backend then will NOT attack: RSR drops a no-line-of-sight target from its
-                    // hostile list, so the mob is hard-targeted and Attack1-marked but nothing casts -- the
-                    // "flew to the mob but it does not attack" report. Close right up to the mob's hitbox
-                    // (~1y) to clear the block instead of freezing; the rotation is still ENABLED below (no
-                    // Disable here, so no Off/On thrash). Once line of sight is clear the next tick stops
-                    // and fights normally.
-                    Log($"mob in range ({mobDist:F1}y) but no line of sight; closing in to clear it");
-                    ctx.Navmesh.MoveCloseTo(mobPos, false, 1f);
-                }
-                else
-                {
-                    Log($"mob in range ({mobDist:F1}y); engaging");
-                    ctx.Navmesh.Stop();
-                }
-
                 // The relic mob is the current hard target (set at the top of Update). Capture it
                 // before any add retarget: it is what base-relic counting tracks, and it is the
                 // object we exclude when scanning for adds (it is itself "targeting us" once pulled).
@@ -430,9 +408,59 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 // relic mob and take free hits. If something else is attacking us, retarget to it so
                 // RSR fights back; once it dies the relic mob is re-acquired at the top of the next
                 // Update. Base-relic counting stays latched to the relic mob below.
+                //
+                // This runs BEFORE the movement decision so that decision is made for the mob we are
+                // ACTUALLY fighting. It used to run after, leaving the approach keyed to the relic mob:
+                // an add with no distance cap could be far away -- a ranged mob on the tier above that
+                // will not walk to us -- and under a rotation-only backend nothing else moves us, so we
+                // stood in melee of the relic mob hard-targeting an archer we never reached, attacking
+                // neither. Deciding movement ONCE, here, also keeps it to a single navmesh command per
+                // tick: Stop() is not edge-triggered, so issuing a move for one mob and a stop for the
+                // other in the same tick re-paths forever.
                 var meId = Plugin.ObjectTable.LocalPlayer?.GameObjectId ?? 0;
-                if (ctx.Targeting.EngageAggressor(meId, relicId))
+                var fightPos = mobPos;
+                var fightDist = mobDist;
+                if (ctx.Targeting.EngageAggressor(meId, relicId, Combat.Companion.CompanionId()))
+                {
                     Log("add aggroed while engaging; marking + fighting it before the relic mob");
+                    if (Plugin.TargetManager.Target is { } add)
+                    {
+                        fightPos = add.Position;
+                        fightDist = Vector3.Distance(self, fightPos);
+                    }
+                }
+
+                // Stand and fight when in melee. If the target has only drifted a little past melee
+                // (still inside the band), chase it ON FOOT but KEEP RSR enabled -- do NOT disable
+                // it for a small correction, which is exactly what produced the Off/On thrash.
+                var fightTarget = Plugin.TargetManager.Target;
+                if (fightDist > EngageRangeFor(fightTarget))
+                {
+                    Log($"target at {fightDist:F1}y; closing on foot while engaged ({Combat.EngageBand.RoleLabel()})");
+                    ctx.Navmesh.MoveCloseTo(fightPos, false, StopRangeFor(fightTarget));
+                }
+                else if (!HasLineOfSight(self, fightPos))
+                {
+                    // In melee range, but terrain blocks the line of sight to the target (we landed under
+                    // a ledge / on a lower tier -- LandAndDismount descends to the floor BELOW the mob).
+                    // The rotation backend then will NOT attack: RSR drops a no-line-of-sight target from
+                    // its hostile list, so the mob is hard-targeted and Attack1-marked but nothing casts --
+                    // the "flew to the mob but it does not attack" report. Close right up to its hitbox
+                    // (~1y) to clear the block instead of freezing; the rotation is still ENABLED below (no
+                    // Disable here, so no Off/On thrash). Once line of sight is clear the next tick stops
+                    // and fights normally.
+                    // Hug it: a yalm off the HULL, not off the centre -- 1y from the centre of a large
+                    // mob is inside its collision, which the navmesh can never reach, so it would path
+                    // forever instead of clearing the block. For a ranged job this is also the one case
+                    // that overrides the standoff band: a cast the terrain eats is a silent no-op.
+                    Log($"target in range ({fightDist:F1}y) but no line of sight; closing in to clear it");
+                    ctx.Navmesh.MoveCloseTo(fightPos, false, 1f + (fightTarget?.HitboxRadius ?? 0f));
+                }
+                else
+                {
+                    Log($"target in range ({fightDist:F1}y); engaging");
+                    ctx.Navmesh.Stop();
+                }
 
                 // Attack1-mark the PRIORITY hard target (the add we just switched to, or the relic
                 // mob if none aggroed) and drive RSR in MANUAL mode. Manual runs the rotation
@@ -527,11 +555,12 @@ public sealed class KillTargetExecutor : ITaskExecutor
                     return ExecutorStatus.InProgress;
                 }
 
-                Log($"mob located at {mobDist:F1}y; closing in");
+                Log($"mob located at {mobDist:F1}y; closing in ({Combat.EngageBand.RoleLabel()})");
                 ctx.Rotation.Disable();
                 if (mobDist > FlyMinDistance)
                     Combat.Mount.EnsureMounted(ctx, mobDist);
-                ctx.Navmesh.MoveCloseTo(mobPos, Plugin.Condition[ConditionFlag.InFlight], EngageRange - 1f);
+                ctx.Navmesh.MoveCloseTo(mobPos, Plugin.Condition[ConditionFlag.InFlight],
+                    StopRangeFor(Plugin.TargetManager.Target));
             }
             return ExecutorStatus.InProgress;
         }

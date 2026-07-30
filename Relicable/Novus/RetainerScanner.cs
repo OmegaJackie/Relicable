@@ -57,13 +57,17 @@ public sealed class RetainerScanner
         if (!GameState.TryGetActiveRetainer(out var id, out var name))
             return;
 
-        // Scan each retainer once per open session, plus a re-scan if either tracked
-        // map changed (e.g. after an auto-withdraw removed some). Both the Novus materia
-        // catalog and the base-relic material catalog are scanned in this one bag pass.
+        // Scan each retainer once per open session, plus a re-scan if any tracked
+        // map changed (e.g. after an auto-withdraw removed some). The Novus materia
+        // catalog, the base-relic material catalog, the atmas and the Braves shopping
+        // list are all scanned in this one bag pass.
         var materiaIds = MateriaCatalog.AllMateriaItemIds().ToList();
         var baseRelicIds = BaseRelicCatalog.AllMaterialItemIds().ToList();
         var atmaIds = GameState.AtmaItemIds;
-        if (materiaIds.Count == 0 && baseRelicIds.Count == 0 && atmaIds.Count == 0)
+        // AllItemIds (not TradableItemIds): an untradable material still sits in a retainer.
+        // The 16 dungeon drops are key items, which resolve to no Item id and are excluded here.
+        var bravesIds = BravesData.AllItemIds();
+        if (materiaIds.Count == 0 && baseRelicIds.Count == 0 && atmaIds.Count == 0 && bravesIds.Count == 0)
             return;
 
         var foundMateria = materiaIds.Count > 0
@@ -77,14 +81,21 @@ public sealed class RetainerScanner
         var foundAtmas = atmaIds.Count > 0
             ? GameState.ScanOpenRetainerItems(atmaIds)
             : new Dictionary<uint, int>();
+        // The Braves shopping list, so its planner can show a per-row retainer count and
+        // point a fetch at the right retainer without one being open.
+        var foundBraves = bravesIds.Count > 0
+            ? GameState.ScanOpenRetainerItems(bravesIds)
+            : new Dictionary<uint, int>();
 
         var existingMateria = _config.RetainerMateria.Retainers.GetValueOrDefault(id);
         var existingBaseRelic = _config.RetainerBaseRelicItems.Retainers.GetValueOrDefault(id);
         var existingAtmas = _config.RetainerAtmas.Retainers.GetValueOrDefault(id);
+        var existingBraves = _config.RetainerBravesItems.Retainers.GetValueOrDefault(id);
         var unchanged = id == _lastScannedRetainer
             && existingMateria != null && SameCounts(existingMateria.Materia, foundMateria)
             && existingBaseRelic != null && SameCounts(existingBaseRelic.Items, foundBaseRelic)
-            && existingAtmas != null && SameCounts(existingAtmas.Items, foundAtmas);
+            && existingAtmas != null && SameCounts(existingAtmas.Items, foundAtmas)
+            && existingBraves != null && SameCounts(existingBraves.Items, foundBraves);
         if (unchanged)
             return;
 
@@ -115,10 +126,19 @@ public sealed class RetainerScanner
             ScannedAtUnix = scannedAt,
             Items = foundAtmas,
         });
+        _config.RetainerBravesItems.Upsert(new RetainerItemSnapshot
+        {
+            RetainerId = id,
+            RetainerName = name,
+            OwnerContentId = owner,
+            ScannedAtUnix = scannedAt,
+            Items = foundBraves,
+        });
         _lastScannedRetainer = id;
         _dirty = true;
         DebugLog.Verbose($"Scanned retainer '{name}': {foundMateria.Values.Sum()} materia, " +
-                         $"{foundBaseRelic.Values.Sum()} base-relic mats, {foundAtmas.Values.Sum()} atmas");
+                         $"{foundBaseRelic.Values.Sum()} base-relic mats, {foundAtmas.Values.Sum()} atmas, " +
+                         $"{foundBraves.Values.Sum()} Braves mats");
 
         FlushIfDue(now);
     }

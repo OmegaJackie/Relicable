@@ -151,7 +151,12 @@ public static class BravesData
         // the drop (calibrated in-game via /relic bravesseq -- see 08:14/08:37 (Ponze), 08:38-08:44
         // (Mother), 11:09 (Method) logs). Ponze bundles obtain+deliver per wiki step, so its dungeon
         // steps land on even sequences (2, 4); Method/Mother count each obtain/deliver, so odd (1,3,5,7 /
-        // 3,5). Labor is DERIVED from the same pattern (not yet observed in-game) -- confirm when run.
+        // 3,5).
+        //
+        // ALL FOUR are now confirmed against the game's own Quest.TodoParams, whose ToDoCompleteSeq is
+        // this same live sequence value and whose ToDoLocation names the duty: Ponze 2,2,4,4 / Labor
+        // 2,2,4,4 / Method 1,3,5,7 / Mother 3,3,3,5. Every number below matches, including the Labor
+        // pair that had only been derived by analogy.
         new BravesMaterial { ItemName = "Horn of the Beast",   Source = BravesSource.DungeonDrop, Quest = QuestPonze, Where = "Dzemael Darkhold",           RequestedAtSequences = new[] { 2 } },
         new BravesMaterial { ItemName = "Gobmachine Bangplate", Source = BravesSource.DungeonDrop, Quest = QuestPonze, Where = "Brayflox's Longstop (Hard)", RequestedAtSequences = new[] { 2 } },
         new BravesMaterial { ItemName = "Narasimha Hide",      Source = BravesSource.DungeonDrop, Quest = QuestPonze, Where = "Halatali (Hard)",            RequestedAtSequences = new[] { 4 } },
@@ -162,7 +167,8 @@ public static class BravesData
         // same 2-per-batch shape A Ponze of Flesh was OBSERVED to use (seq 2 pair, seq 4 pair). These quests
         // auto-advance on OBTAINING a batch (Ponze holds its seq-2 pair at seq 3, un-delivered), so a single
         // held item leaving the quest parked proves the batch needs the other one too. The earlier 2/3/5/6
-        // "one per sequence" was a bad guess. The seq-4 pair mirrors Ponze; confirm when the quest reaches it.
+        // "one per sequence" was a bad guess. The seq-4 pair (derived by analogy at the time) is now
+        // confirmed by Quest.TodoParams: seq 4 points at The Lost City of Amdapor and Sastasha (Hard).
         new BravesMaterial { ItemName = "Vale Bubo",      Source = BravesSource.DungeonDrop, Quest = QuestLabor, Where = "The Aurum Vale",          RequestedAtSequences = new[] { 2 } },
         new BravesMaterial { ItemName = "Voidweave",      Source = BravesSource.DungeonDrop, Quest = QuestLabor, Where = "Haukke Manor (Hard)",     RequestedAtSequences = new[] { 2 } },
         new BravesMaterial { ItemName = "Amdapor Vellum", Source = BravesSource.DungeonDrop, Quest = QuestLabor, Where = "The Lost City of Amdapor", RequestedAtSequences = new[] { 4 } },
@@ -229,22 +235,135 @@ public static class BravesData
     // The four repeatable material quests, for detecting which one is active.
     public static readonly IReadOnlyList<string> MaterialQuests = new[] { QuestPonze, QuestLabor, QuestMethod, QuestMother };
 
-    // The NPC you accept AND report back / turn in to for each material quest: its ENpcResident data id,
-    // the overworld TerritoryType to teleport to, an approach anchor (world X/Y/Z from Level.csv; the
-    // NpcInteractor homes on the live NPC by data id once it streams in, so the anchor only needs to be
-    // near it), and a human location. Papana (1010809), Guiding Star (1006971) and Brangwine (1006981)
-    // stand at Revenant's Toll (Mor Dhona, T156). Method's Adkin (1010810) resolves to a different zone
-    // (T141) in the Level sheet -- a quest may relocate an NPC, so kept as its own zone and flagged; if
-    // wrong the trip just fails safe. Drives both the who/where guidance and the auto report/turn-in.
-    public static (string Npc, uint DataId, uint Territory, Vector3 Pos, string Where) TurnInNpc(string questName)
+    // A material quest's current destination NPC: its ENpcResident data id, the overworld
+    // TerritoryType to teleport to, an approach anchor (world X/Y/Z from the Level sheet; the
+    // NpcInteractor homes on the live NPC by data id once it streams in, so the anchor only needs
+    // to be near it), and a human location.
+    private sealed record BravesNpc(string Npc, uint DataId, uint Territory, Vector3 Pos, string Where);
+
+    // The quest's BOOKEND NPC: who you accept from and who you hand the finished set to. This is
+    // Quest.IssuerStart / Quest.TargetEnd, and for three of the four quests it is also who you report
+    // each dungeon batch to -- but NOT for A Treasured Mother, so never use it for a report. See
+    // Reporter below.
+    private static BravesNpc? Bookend(string? questName)
         => (questName?.Trim() ?? string.Empty) switch
         {
-            QuestPonze  => ("Papana",       1010809, 156, new Vector3(73.1265f, 33.0666f, -704.391f), "Revenant's Toll, Mor Dhona"),
-            QuestLabor  => ("Guiding Star", 1006971, 156, new Vector3(24.3083f, 29.0217f, -726.856f), "Revenant's Toll, Mor Dhona"),
-            QuestMethod => ("Adkin",        1010810, 141, new Vector3(109.488f, 31f,      -388.829f), "Black Brush Station, Central Thanalan"),
-            QuestMother => ("Brangwine",    1006981, 156, new Vector3(25.7269f, 29f,      -738.206f), "Revenant's Toll, Mor Dhona"),
-            _ => (string.Empty, 0u, 0u, Vector3.Zero, string.Empty),
+            QuestPonze  => new("Papana",       1010809, 156, new Vector3(73.1265f, 33.0666f, -704.391f), "Revenant's Toll, Mor Dhona"),
+            QuestLabor  => new("Guiding Star", 1006971, 156, new Vector3(24.3083f, 29.0217f, -726.856f), "Revenant's Toll, Mor Dhona"),
+            QuestMethod => new("Adkin",        1010810, 141, new Vector3(109.488f, 31f,      -388.829f), "Black Brush Station, Central Thanalan"),
+            QuestMother => new("Brangwine",    1006981, 156, new Vector3(25.7269f, 29f,      -738.206f), "Revenant's Toll, Mor Dhona"),
+            _ => null,
         };
+
+    // Who a quest sends you BACK to between dungeon batches. Three of the four keep you with the
+    // quest giver; A Treasured Mother does not -- Brangwine hands you off to Ealdwine at Swiftperch
+    // in Western La Noscea, and every intermediate report goes to him (only the final turn-in returns
+    // to Brangwine). Reading the bookend NPC for a report is exactly the bug this split fixes.
+    private static BravesNpc? Reporter(string? questName)
+        => (questName?.Trim() ?? string.Empty) switch
+        {
+            QuestMother => new("Ealdwine", 1010811, 138, new Vector3(645.282f, 5.632f, 551.612f), "Swiftperch, Western La Noscea"),
+            var other => Bookend(other),
+        };
+
+    // The sequence a material quest parks at for its final turn-in (Quest.TodoParams' last entry).
+    private const int FinalSequence = 255;
+
+    // Where the quest wants you at `sequence` (GameState.QuestSequence): its ENpcResident data id,
+    // territory, an approach anchor and a human location. Empty tuple when it does not resolve.
+    //
+    // The authored tables above are only a FALLBACK. The primary source is the quest's own
+    // Quest.TodoParams, whose ToDoCompleteSeq is the live sequence value and whose ToDoLocation is
+    // the Level row the game itself points its objective marker at -- so this answers "who now?"
+    // from game data instead of a transcription that can be (and was) wrong. Sequences whose
+    // objective is a dungeon rather than an NPC resolve to nothing and fall through.
+    //
+    // sequence <= 0 means "unknown": the caller gets the bookend NPC, which is the right answer for
+    // accepting and for the final turn-in.
+    public static (string Npc, uint DataId, uint Territory, Vector3 Pos, string Where) TurnInNpc(
+        string questName, int sequence = 0)
+    {
+        var target = FromQuestSheet(questName, sequence)
+                     ?? (sequence is > 1 and < FinalSequence ? Reporter(questName) : Bookend(questName));
+        return target == null
+            ? (string.Empty, 0u, 0u, Vector3.Zero, string.Empty)
+            : (target.Npc, target.DataId, target.Territory, target.Pos, target.Where);
+    }
+
+    // ENpcResident row ids occupy this block. A Level row's Object can also be an EObj / battle NPC
+    // (a dungeon entrance, for instance), which is not somebody we can walk up to and talk to.
+    private const uint ENpcFirst = 1_000_000;
+    private const uint ENpcLast = 2_000_000;
+
+    private static readonly Dictionary<(uint Quest, int Seq), BravesNpc?> SheetTargets = new();
+
+    // The NPC the quest's own objective marker points at for this sequence, or null when that
+    // sequence has no NPC objective (it is a dungeon) or the sheet read fails.
+    private static BravesNpc? FromQuestSheet(string questName, int sequence)
+    {
+        var questId = MaterialQuestId(questName);
+        if (questId == 0 || sequence <= 0 || sequence > byte.MaxValue)
+            return null;
+
+        var key = (questId, sequence);
+        if (SheetTargets.TryGetValue(key, out var cached))
+            return cached; // negative results are cached too; the sheets never change in a session
+
+        BravesNpc? found = null;
+        try
+        {
+            if (Plugin.DataManager.GetExcelSheet<Quest>().GetRowOrDefault(questId) is { } quest)
+            {
+                foreach (var todo in quest.TodoParams)
+                {
+                    if (todo.ToDoCompleteSeq != sequence)
+                        continue;
+                    foreach (var loc in todo.ToDoLocation)
+                    {
+                        if (loc.ValueNullable is not { } level)
+                            continue;
+                        var npcId = level.Object.RowId;
+                        if (npcId < ENpcFirst || npcId >= ENpcLast)
+                            continue; // a dungeon / object objective, not a person
+                        var name = Plugin.DataManager.GetExcelSheet<ENpcResident>()
+                            .GetRowOrDefault(npcId)?.Singular.ExtractText() ?? string.Empty;
+                        var territory = level.Territory.RowId;
+                        found = new BravesNpc(name, npcId, territory,
+                            new Vector3(level.X, level.Y, level.Z), WhereLabel(npcId, territory));
+                        break;
+                    }
+                    if (found != null)
+                        break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"Relicable: Braves turn-in lookup failed for '{questName}' seq {sequence}: {ex.Message}");
+        }
+
+        SheetTargets[key] = found;
+        return found;
+    }
+
+    // Human location for a sheet-derived NPC: reuse the authored wording when it is one of the NPCs
+    // we already describe (those name the settlement, not just the zone), else the zone name.
+    private static string WhereLabel(uint npcId, uint territory)
+    {
+        foreach (var quest in MaterialQuests)
+        {
+            if (Bookend(quest) is { } b && b.DataId == npcId)
+                return b.Where;
+            if (Reporter(quest) is { } r && r.DataId == npcId)
+                return r.Where;
+        }
+        try
+        {
+            return Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territory)
+                ?.PlaceName.ValueNullable?.Name.ExtractText() ?? string.Empty;
+        }
+        catch { return string.Empty; }
+    }
 
     private static Dictionary<string, uint>? _questIds;
 
@@ -273,11 +392,17 @@ public static class BravesData
         return map;
     }
 
-    // Every resolved material item id, for a single Universalis price fetch.
+    private static IReadOnlyList<uint>? _allIds;
+
+    // Every resolved material item id, for a single Universalis price fetch. Cached: the
+    // retainer scanner asks for this on every scan tick while a retainer is open, and the
+    // resolved set is fixed game data.
     public static IReadOnlyList<uint> AllItemIds()
     {
+        if (_allIds != null)
+            return _allIds;
         Ensure();
-        return IdByName.Values.Where(v => v != 0).Distinct().ToList();
+        return _allIds = IdByName.Values.Where(v => v != 0).Distinct().ToList();
     }
 
     // Resolved ids for TRADABLE materials only. Untradable items (the dungeon drops) have no
