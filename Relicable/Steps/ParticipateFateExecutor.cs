@@ -35,7 +35,45 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
     // Interact range for a "speak to begin" FATE's start NPC (NPC-initiated boss FATEs).
     private const float FateInteractRange = 4f;
 
+    // ---- Approach stall guard ----
+    // The FATE approach had NO progress check of any kind: an unreachable goal -- a mob hovering
+    // over water or stood on an off-mesh ledge, a ring whose centre vnav cannot path to -- looped
+    // here forever with the rotation disabled and nothing to break the tie. (The kill grind has had
+    // this guard since it hit the same wall; see KillTargetExecutor's _lockBestDist / StallTimeoutMs.)
+    //
+    // Deliberately SLOWER than the kill grind's 12s: FATE mobs roam far more than note mobs, and a
+    // boss kiting around its own ring can legitimately keep us from closing for a while. Only a
+    // genuinely stuck approach should trip 20s of no progress at all.
+    private const float ApproachProgress = 3f;      // this much closer counts as real progress
+    private const long ApproachStallMs = 20000;
+    private const long ApproachStuckMs = 25000;     // how long a blacklisted mob / FATE is skipped
+    // The landing branch returns BEFORE the distance guard above, so it needs its own watchdog: a
+    // mob hovering over water/a shaft can never be descended to. See LandWithWatchdog.
+    private const long FateLandTimeoutMs = 6000;
+    private long _landingSince;
+
+    // What the tracker is currently measuring, so a NEW goal restarts it rather than inheriting the
+    // previous one's clock. Keyed on identity (which FATE, which mob) NOT position: the goal is a
+    // live mob that moves every tick, so a position key would reset constantly and never trip.
+    private ushort _approachFate;
+    private ulong _approachMob;
+    private float _approachBest;
+    private long _approachProgressAt;
+
+    // A FATE mob we could not close on, skipped until _stuckMobUntil so the approach picks another
+    // (or falls back to the ring centre). Cheap and self-healing -- the blacklist simply expires.
+    private ulong _stuckMobId;
+    private long _stuckMobUntil;
+    // A whole FATE whose RING we could not reach. Only used by the Atma "any active FATE" mode,
+    // where there is no Rotate to fall back on (see the travel branch), so the next-nearest active
+    // FATE is picked instead.
+    private ushort _stuckFateId;
+    private long _stuckFateUntil;
+
     private bool _wasInside;
+    // Any ring stood in this step (target OR prerequisite). Separate from _wasInside, which is
+    // target-only because it drives completion; see the stall escapes in Update.
+    private bool _participated;
     private bool _engaging;
     private long _syncThrottle;
     private long _waitLog;
@@ -44,6 +82,9 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
     private long _startInteractThrottle;
     private long _stateLog; // throttles the engage-decision heartbeat
     private ulong _engageLoggedId; // dedup for the per-target engage log
+    // CombatAssist.DefendSelf's per-caller latch: the id we last armed the backend for, so the
+    // mode is re-sent only when the aggressor changes and never per tick.
+    private ulong _defendArmedId;
     private System.Numerics.Vector3? _flaggedFor;
     // Prerequisite-chain FATEs (StepData.PrerequisiteFateId): a few book FATEs (e.g. Breaching North
     // Tidegate) do not spawn until a PREDECESSOR overworld FATE (Gauging North Tidegate) is cleared.
@@ -56,6 +97,7 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
     public void Start(StepData step, ExecutionContext ctx)
     {
         _wasInside = false;
+        _participated = false;
         _engaging = false;
         _syncThrottle = 0;
         _waitLog = 0;
@@ -63,6 +105,15 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         _startInteractThrottle = 0;
         _stateLog = 0;
         _engageLoggedId = 0;
+        _defendArmedId = 0; // executors are singletons; a stale latch would suppress the re-arm
+        // Approach stall guard: all per-step, and all MUST reset -- a blacklist carried over from a
+        // previous FATE would skip a mob (or a whole FATE) this one still needs.
+        ResetApproachTracker();
+        _stuckMobId = 0;
+        _stuckMobUntil = 0;
+        _stuckFateId = 0;
+        _stuckFateUntil = 0;
+        _landingSince = 0;
         _flaggedFor = null;
         _workingPrereq = false;
         _prereqDone = false;
@@ -90,7 +141,12 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // Only the TARGET credits the book slot, so _workingPrereq gates completion below: finishing
         // the prereq never completes the step. Every other FATE has PrerequisiteFateId == 0 and skips
         // this entirely, so the normal FATE flow is unchanged.
-        var target = step.FateId != 0 ? Fates.ById((ushort)step.FateId) : Fates.NearestActive();
+        // Atma mode only: skip a FATE whose ring we just failed to reach (see the approach stall
+        // guard), so the next-nearest active FATE is taken instead of re-picking the unreachable one
+        // every tick. A specific book FATE is never skipped -- it is the objective, and its escape
+        // hatch is Rotate.
+        var avoidFate = System.Environment.TickCount64 < _stuckFateUntil ? _stuckFateId : (ushort)0;
+        var target = step.FateId != 0 ? Fates.ById((ushort)step.FateId) : Fates.NearestActive(avoidFate);
         var fate = target;
         _workingPrereq = false;
         if (target == null && step.PrerequisiteFateId != 0 && !_prereqDone)
@@ -132,6 +188,19 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
             // FATE coordinates are not in the sheets, so the location comes from the authored
             // per-zone FATE spawn table (Data/BraveBookPositions) via the step's Position;
             // without one we can only idle in place.
+            //
+            // Self-defense FIRST: this stage-and-wait is the longest idle in the whole run (Atma's
+            // "any active FATE" mode waits indefinitely), and it used to sit here with the rotation
+            // disabled no matter what was hitting us. Nothing else here could see the attacker --
+            // NearestHostileInFate matches only mobs carrying the FATE's id, so an ordinary
+            // overworld hostile that wandered onto us was invisible at any distance. Freeze the
+            // spawn-wait clock while defending so an add fight cannot burn the rotate window and
+            // make us skip a FATE that was about to spawn.
+            if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            {
+                _startTick = System.Environment.TickCount64;
+                return ExecutorStatus.InProgress;
+            }
             ctx.Rotation.Disable();
 
             // The flag / FlagToPoint only resolve once the zone navmesh is built; wait for it before
@@ -317,10 +386,40 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // (a table despawn while we were inside means the FATE is over). Never latched for the prereq.
         if (inRing && !_workingPrereq)
             _wasInside = true;
-        var enemy = ctx.Targeting.NearestHostileInFate(fate.FateId);
-        var goal = inRing && enemy != null ? enemy.Position : fate.Position;
+        // Any ring we have physically stood in this step, the TARGET's or a PREREQUISITE's. _wasInside
+        // is target-only because it drives completion, so it cannot gate the stall escapes below:
+        // rotating off a prereq we fought in, or blacklisting the Atma FATE we are standing in,
+        // forfeits that work just as surely.
+        if (inRing)
+            _participated = true;
+        // Skip a mob we already failed to close on (blacklist expires on its own), so the approach
+        // moves to another FATE mob or falls back to the ring centre.
+        var avoidMob = System.Environment.TickCount64 < _stuckMobUntil ? _stuckMobId : 0ul;
+        var enemy = ctx.Targeting.NearestHostileInFate(fate.FateId, avoidMob);
+        // The mob is the GOAL only once we are INSIDE the ring -- outside it we deliberately route to
+        // the centre first (see the block above). FATE membership is by the mob's own FateId, NOT ring
+        // geometry, so `enemy` is non-null from well outside the ring: keying the stall tracker, the
+        // give-up blacklist or the landing watchdog on it out there would blame a mob we are not
+        // navigating to, re-key the clock on every nearest-mob swap, and leave the ring escapes below
+        // unreachable whenever any FATE mob is loaded. goalMob is what we are actually approaching, so
+        // a null goalMob genuinely means "the goal is the ring centre".
+        var goalMob = inRing ? enemy : null;
+        var goal = goalMob?.Position ?? fate.Position;
         var dist = Vector3.Distance(me, goal);
-        var engageBand = _engaging ? FateDisengageRange : FateEngageRange;
+        // Distances here are centre-to-centre, but a big FATE boss's collision hull parks us several
+        // yalms outside its centre, so a fixed band can never be satisfied: the approach hugs the hull
+        // and the stall guard below then trips on a mob we are already standing on top of. Game melee
+        // range is measured to the hitbox EDGE, so add it. Combat.EngageBand does that AND holds a
+        // ranged job at its own standoff instead of marching it into melee.
+        //
+        // Standing off is safe HERE specifically because the approach has already routed us through
+        // the ring centre (goalMob is null until inRing): closing less than the whole way leaves us
+        // between the centre and the mob, i.e. still inside the ring and still level-synced. Backing
+        // OUT would not be safe, and EngageBand never does that.
+        var engageBand = _engaging ? Combat.EngageBand.Disengage(goalMob) : Combat.EngageBand.Engage(goalMob);
+        // The ring centre is a place, not a mob: no hitbox, no standoff -- go to it.
+        if (goalMob == null)
+            engageBand = _engaging ? FateDisengageRange : FateEngageRange;
 
         // Engage-decision heartbeat (every 5s), the FATE analogue of the leve/beastmen heartbeats:
         // when the run "gets to the FATE and does not attack", this line shows EXACTLY why. The
@@ -348,11 +447,19 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // "tries to land but keeps flying up" trap KillTargetExecutor fixed). LandAndDismount routes
         // down to a landable floor point near the mob, so we never try to dismount over bad terrain.
         var horiz = Vector2.Distance(new Vector2(me.X, me.Z), new Vector2(goal.X, goal.Z));
-        if (!Combat.Mount.IsGrounded() && horiz <= engageBand + 6f)
+        // Grounded, OR the goal drifted back out of the landing band -- either way we are not landing,
+        // so the watchdog clock must not keep running as wall time. Clearing it only on "grounded"
+        // leaked: a roaming boss leaving the band left us airborne with the clock ticking (as do the
+        // early returns above this line), and the next REAL descent then found it already expired and
+        // gave up on its very first tick, force-dismounting and blacklisting a reachable mob.
+        var landing = !Combat.Mount.IsGrounded() && horiz <= engageBand + 6f;
+        if (!landing)
+            _landingSince = 0;
+        if (landing)
         {
             ctx.Navmesh.Stop();
             ctx.Rotation.Disable();
-            Combat.Mount.LandAndDismount(ctx, goal);
+            LandWithWatchdog(ctx, goal, goalMob);
             return ExecutorStatus.InProgress;
         }
 
@@ -369,18 +476,90 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         if (dist > engageBand)
         {
             _engaging = false;
+
+            // Stall guard. Without one, an approach that can never finish -- a mob hovering over
+            // water or on an off-mesh ledge, a ring centre vnav cannot path to -- sat here forever
+            // re-issuing the same move with the rotation OFF. Give up on the goal after
+            // ApproachStallMs of no progress and take the cheapest escape that still makes headway.
+            //
+            // A navmesh that is still BUILDING is not a stall: vnav cannot move us at all until it is
+            // ready and an uncached ARR zone takes far longer than ApproachStallMs, so freeze the
+            // clock rather than counting build time against a FATE that is up and reachable. (The
+            // spawn-wait path gates on IsReady for exactly this reason.)
+            if (!ctx.Navmesh.IsReady())
+                _approachProgressAt = System.Environment.TickCount64;
+            else if (StalledApproaching(fate.FateId, goalMob?.GameObjectId ?? 0, dist))
+            {
+                ctx.Navmesh.Stop();
+                ResetApproachTracker();
+
+                // The goal was a specific mob AND there is another one to try: blacklist it and let
+                // the next tick pick the other. Only then -- the blacklist also hides the mob from the
+                // engage site below (EngageNearestHostileInFate takes the same avoidMob), so on a
+                // single-boss FATE this would leave us standing next to a live, hittable boss doing
+                // nothing for ApproachStuckMs. With no alternative, fall through to the arms below.
+                if (goalMob != null
+                    && ctx.Targeting.NearestHostileInFate(fate.FateId, goalMob.GameObjectId) != null)
+                {
+                    _stuckMobId = goalMob.GameObjectId;
+                    _stuckMobUntil = System.Environment.TickCount64 + ApproachStuckMs;
+                    DebugLog.Info($"FATE {fate.FateId}: no approach progress on a mob for " +
+                        $"{ApproachStallMs / 1000}s at {dist:0}y; trying a different one.");
+                    return ExecutorStatus.InProgress;
+                }
+
+                // No alternative target. Once we have actually stood in a ring this step
+                // (_participated, latched on entry to the TARGET's or a PREREQUISITE's ring), neither
+                // escape below is acceptable: rotating walks away from a FATE we fought in, and
+                // blacklisting a FATE we are standing IN makes NearestActive return null next tick,
+                // which the fate == null branch above reads as "FATE ended" and COMPLETES -- a false
+                // completion on a still-running FATE. Retry instead; that still terminates, because
+                // every FATE ends on its own timer and the FATE-ended branch then completes normally.
+                if (_participated)
+                {
+                    WaitLog($"FATE {fate.FateId}: cannot reach the goal ({dist:0}y) but we already " +
+                        "participated; retrying until it ends rather than forfeiting the credit.");
+                    Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId);
+                    return ExecutorStatus.InProgress;
+                }
+
+                // Never entered the ring. A specific book FATE rotates -- the controller stamps it and
+                // moves to the next incomplete objective, coming back later (the same non-failing
+                // escape the spawn-wait window uses).
+                if (step.FateId != 0)
+                {
+                    DebugLog.Warn($"FATE {fate.FateId}: could not path to the ring within " +
+                        $"{ApproachStallMs / 1000}s (stuck at {dist:0}y); rotating to another objective.");
+                    return ExecutorStatus.Rotate;
+                }
+
+                // Atma's "any active FATE" mode has nothing to rotate TO, so blacklist this FATE and
+                // let NearestActive pick the next nearest one. Safe here only because !_participated.
+                _stuckFateId = fate.FateId;
+                _stuckFateUntil = System.Environment.TickCount64 + ApproachStuckMs;
+                DebugLog.Warn($"FATE {fate.FateId}: could not path to the ring within " +
+                    $"{ApproachStallMs / 1000}s (stuck at {dist:0}y); trying the next nearest FATE.");
+                return ExecutorStatus.InProgress;
+            }
+
             ctx.Rotation.Disable();
             Combat.Mount.EnsureMounted(ctx, dist);
-            ctx.Navmesh.MoveCloseTo(goal, Flight.ShouldFly(ctx, dist), FateEngageRange - 1f);
+            // Stop distance matches the band we just failed: hitbox- and role-aware for a mob,
+            // the plain ring distance when the goal is the centre.
+            var stopAt = goalMob != null ? Combat.EngageBand.Stop(goalMob) : FateEngageRange - 1f;
+            ctx.Navmesh.MoveCloseTo(goal, Flight.ShouldFly(ctx, dist), stopAt);
             return ExecutorStatus.InProgress;
         }
+
+        // Arrived: the approach succeeded, so drop its progress tracker (the next one starts clean).
+        ResetApproachTracker();
 
         // In range. Stop and get fully grounded before fighting.
         ctx.Navmesh.Stop();
         if (!Combat.Mount.IsGrounded())
         {
             ctx.Rotation.Disable();
-            Combat.Mount.LandAndDismount(ctx, goal);
+            LandWithWatchdog(ctx, goal, goalMob);
             return ExecutorStatus.InProgress;
         }
 
@@ -442,7 +621,7 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
                     $"inRing={GameState.CurrentFateId() == fate.FateId}); Auto mode on, letting RSR pick FATE mobs.");
             }
         }
-        else if (ctx.Targeting.EngageNearestHostileInFate(fate.FateId))
+        else if (ctx.Targeting.EngageNearestHostileInFate(fate.FateId, avoidMob))
         {
             // Attack1-mark the FATE mob (via the game chat box, like the kill grind's /enemysign) so
             // the backend prioritises attacking THIS mob rather than idling next to it -- the marker
@@ -466,7 +645,11 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
             // No mob in the ring right now (a brief gap between waves): drop out of the engage band so
             // we do not sit level-synced at melee while the next wave streams in elsewhere.
             _engaging = false;
-            ctx.Rotation.Disable();
+            // ...but "no FATE mob" is not "no enemy". A non-FATE hostile that aggroed while we stood
+            // in the ring carries FateId 0, so NearestHostileInFate never returns it and this branch
+            // disabled the rotation while it kept hitting us. Fight it before idling.
+            if (!Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+                ctx.Rotation.Disable();
         }
 
         return ExecutorStatus.InProgress;
@@ -485,6 +668,76 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // "a treasure to run" and would chase this one forever. The next objective drops
         // its own fresh flag (Start resets _flaggedFor), so nothing is lost.
         MapFlag.Clear();
+    }
+
+    // Land + dismount near the goal, with a WATCHDOG. The other half of the unreachable-goal problem:
+    // a mob hovering over water or a shaft has no floor beneath it, so the descent never completes
+    // and this branch looped here forever with the rotation disabled -- and because it returns before
+    // the travel branch, the distance-based stall guard above could never see it either. After
+    // FateLandTimeoutMs, force a bare dismount and blacklist the mob so the next tick approaches a
+    // different one (or the ring centre). Mirrors KillTargetExecutor.LandWithWatchdog.
+    private void LandWithWatchdog(ExecutionContext ctx, Vector3 goal, Dalamud.Game.ClientState.Objects.Types.IGameObject? enemy)
+    {
+        var now = System.Environment.TickCount64;
+        if (_landingSince == 0)
+            _landingSince = now;
+
+        if (now - _landingSince > FateLandTimeoutMs)
+        {
+            DebugLog.Warn($"FATE: could not land near the goal within {FateLandTimeoutMs / 1000}s " +
+                "(no floor beneath it?); dismounting and trying another target.");
+            Combat.Mount.EnsureDismounted();
+            _landingSince = 0;
+            ctx.Navmesh.Stop();
+            ResetApproachTracker();
+            if (enemy != null)
+            {
+                _stuckMobId = enemy.GameObjectId;
+                _stuckMobUntil = now + ApproachStuckMs;
+            }
+            return;
+        }
+
+        Combat.Mount.LandAndDismount(ctx, goal);
+    }
+
+    // Approach progress tracking. Returns true when we have gone ApproachStallMs without getting
+    // materially closer to the SAME goal -- i.e. the goal is very likely unreachable.
+    //
+    // Keyed on goal IDENTITY (which FATE, which mob; mobId 0 = the ring centre), never on position:
+    // the goal is usually a live mob that moves every tick, so a position key would restart the
+    // clock constantly and the guard could never trip. Switching goals -- a different mob, the mob
+    // dying, falling back to the centre -- legitimately restarts it, because that is a genuinely
+    // new approach with its own chance of succeeding.
+    private bool StalledApproaching(ushort fateId, ulong mobId, float dist)
+    {
+        var now = System.Environment.TickCount64;
+
+        if (fateId != _approachFate || mobId != _approachMob)
+        {
+            _approachFate = fateId;
+            _approachMob = mobId;
+            _approachBest = dist;
+            _approachProgressAt = now;
+            return false;
+        }
+
+        if (dist < _approachBest - ApproachProgress)
+        {
+            _approachBest = dist;
+            _approachProgressAt = now;
+            return false;
+        }
+
+        return now - _approachProgressAt > ApproachStallMs;
+    }
+
+    private void ResetApproachTracker()
+    {
+        _approachFate = 0;
+        _approachMob = 0;
+        _approachBest = float.MaxValue;
+        _approachProgressAt = 0;
     }
 
     // Throttled status log (every 10s) so the wait state is visible without spam.
@@ -756,7 +1009,10 @@ internal static class Fates
         return null;
     }
 
-    public static IFate? NearestActive()
+    // avoidId: a FATE the caller judged unreachable (it could not path to the ring at all), skipped
+    // for a cooldown so the Atma "any active FATE" mode moves to the next nearest one instead of
+    // pathing at an unreachable ring forever.
+    public static IFate? NearestActive(ushort avoidId = 0)
     {
         IFate? best = null;
         var bestDist = float.MaxValue;
@@ -764,6 +1020,8 @@ internal static class Fates
 
         foreach (var f in Plugin.FateTable)
         {
+            if (avoidId != 0 && f.FateId == avoidId)
+                continue;
             // Running FATEs, PLUS not-yet-started NPC-initiated ones: a "speak to begin" boss FATE has a
             // MotivationNpc and sits in Preparing until interacted with, so including it here lets the
             // Atma "any FATE in zone" mode walk over and START it (DriveFateStart) instead of treating

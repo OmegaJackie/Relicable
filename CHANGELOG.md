@@ -1,5 +1,169 @@
 # Changelog
 
+## 1.5.4.5 — Melee actually closes to melee, and the relic can finally come off
+
+### Fixed
+
+- **It stops out of melee range and stands there.** Every combat loop decided "am I close enough
+  to fight?" by measuring 4 yalms from the target's *centre*. The game measures reach from the
+  target's *hitbox edge*, so anything with a sizeable collision hull could never satisfy it: the
+  character closes until the hull stops it, several yalms short of the centre, the check stays
+  false, and it keeps re-issuing an approach it can never finish while standing on top of a mob it
+  could have been hitting. The FATE loop was given the hitbox term a few builds ago; the relic-note
+  grind and the leve runner never got it. All three now share one distance model.
+
+- **The relic could not be taken off, so upgrades and hand-overs silently did nothing.** Taking a
+  weapon off was implemented as "move it to a free armoury slot" — correct for an off hand, and
+  impossible for a main hand, because FFXIV has no bare-handed state and the server just refuses
+  the move. It failed without an error, so the relic stayed on, the trade window listed nothing to
+  trade, and the step waited out its timer.
+
+  The main hand now **swaps** instead: Relicable picks the best non-relic weapon that job owns and
+  puts it on, which displaces the relic into the armoury — the same end state, by a route the game
+  permits. If the job owns no other weapon at all, it says so and tells you to get one rather than
+  failing quietly.
+
+- **A Paladin's Holy Shield was never put back.** Every "re-equip what we took off" path sent the
+  item to the main hand, and the game silently refuses a shield there. The destination hand is now
+  taken from the item itself.
+
+### Added
+
+- **Ranged jobs hold at range instead of walking into melee.** The engage distance is now chosen
+  from the job's role: melee and tanks close to the hitbox edge, physical ranged and casters settle
+  at about 15 yalms. The near distance is a floor, never a retreat — a caster that is already close
+  just fights from where it stands, so this never tugs against BossMod Reborn's own positioning.
+  Two deliberate exceptions still close all the way in: a blocked line of sight (a cast the terrain
+  eats is a silent no-op), and holding station on a protection leve's charge.
+
+- **Gear sets follow the relic through its upgrades.** Each upgrade replaces the weapon with a new
+  item id, which left the gear set you actually use naming a weapon that no longer exists — so the
+  next `/gearset change` came up with an empty main hand, and no shield on a Paladin. The set you
+  are wearing is now rewritten to the current relic after an upgrade. It only does that when the
+  set belongs to the job you are on and every non-weapon slot already matches, so the write cannot
+  change anything but the weapon. Turn it off with "Keep gear sets on the current relic" in the
+  config.
+
+## 1.5.4.4 — A Treasured Mother reports to Ealdwine, not Brangwine
+
+### Fixed
+
+- **A Treasured Mother was being reported to the wrong person, in the wrong zone.** Between dungeon
+  batches that quest does not send you back to Brangwine — Brangwine hands you off to **Ealdwine at
+  Swiftperch in Western La Noscea**, and only the *final* turn-in returns to Mor Dhona. The engine
+  had one NPC per material quest and used it for everything, so every report flew to Revenant's Toll
+  and stood in front of somebody with nothing to say.
+
+  The cause was the source of the data, not a typo: the table was built from the quest's start and
+  end NPCs, which genuinely are Brangwine for both. The intermediate steps were never in it. The
+  turn-in target is now read from the quest's own objective marker for the sequence it is actually
+  on, so it is the game's answer rather than a transcription — for all four material quests, and for
+  reports and final turn-ins alike. The old table remains only as a fallback, with Ealdwine added to
+  it.
+
+  The trip also now teleports to the aetheryte **nearest** the NPC rather than just one in the zone.
+  Western La Noscea has two, and the generic pick could have landed at Aleport and walked.
+
+### Changed
+
+- **The dungeon-step sequences for all four material quests are now confirmed against game data.**
+  They were calibrated by hand in-game, one quest at a time, and Labor of Love's second pair had only
+  been derived by analogy. Every number matches what the quests themselves declare.
+
+## 1.5.4.3 — The Braves shopping list can pull from your retainers
+
+### Added
+
+- **Every Braves material is now fetchable from your retainers — individually, by group, or all at
+  once.** The Novus planner has been able to empty your retainers into your bags for a while; the
+  Braves list, which is where the expensive materials actually pile up, could only tell you what to
+  buy. Each row now has its own **Fetch** button, each section has **Fetch group**, and the top of
+  the panel has **Fetch all from retainers**. Open a summoning bell and Relicable visits each
+  retainer in turn, retrieves what is still needed, and backs out of the retainer UI cleanly when it
+  is done. AutoRetainer is paused for the duration and restored afterwards, so the two never fight
+  over the bell.
+
+  Turning off *Pull items automatically* keeps the same buttons but moves nothing: open a retainer
+  and the status line lists exactly what to drag out.
+
+- **A Retainer column on every material.** The bell scan that already recorded your materia now
+  records the Braves shopping list too, so each row shows how many sit on a retainer even while you
+  are nowhere near a bell — and with no retainer open, a fetch tells you which retainer to visit.
+  The sixteen dungeon drops are key items and can never be entrusted to a retainer, so they show no
+  retainer count and no button.
+
+### Fixed
+
+- **Unloading the plugin mid-fetch no longer leaves AutoRetainer paused.** A fetch suppresses
+  AutoRetainer while it runs and only its Stop restores it, so unloading part-way through left
+  AutoRetainer switched off with nothing left to switch it back on.
+
+## 1.5.4.2 — A FATE it cannot reach no longer hangs the run
+
+### Fixed
+
+- **An unreachable FATE target no longer loops forever.** The FATE approach had no progress check of
+  any kind, so a goal it could never actually get to — a mob hovering over water, one stood on a
+  ledge the navmesh does not cover, a ring it cannot path into — meant walking at it indefinitely
+  with the rotation switched off and nothing to break the tie. The main grind has had this guard for
+  a long time; the FATE loop never got one.
+
+  It now notices when it has spent twenty seconds without getting meaningfully closer, and takes the
+  cheapest way forward: skip that mob and take another one, or, if there is no other mob and it has
+  never made it into the ring, move to a different objective and come back later. Nothing is thrown
+  away — every skip expires on its own. Crucially, once it *has* fought in the ring it never walks
+  away: it keeps retrying until the FATE ends on its own timer, so credit it already earned is never
+  forfeited, and it defends itself while it waits.
+
+- **It no longer hovers forever over a mob it cannot land next to.** Landing was driven with no time
+  limit at all, so a target with no floor beneath it meant descending forever. It now gives up after
+  six seconds, dismounts, and moves to another target.
+
+- **Big FATE bosses are engaged from the right distance.** Range was measured centre to centre, which
+  a large boss's collision hull makes impossible to satisfy — the character would close to the hull,
+  be unable to get any nearer, and look stalled while stood on top of a boss it could have been
+  hitting. It now accounts for the target's size, as the game itself does.
+
+- **A zone whose map is still building is no longer mistaken for being stuck.** Nothing can move
+  until that finishes, and a cold zone takes far longer than the stall timeout, so a perfectly good
+  FATE could be abandoned purely for loading slowly.
+
+## 1.5.4.1 — Fight back when something aggroes
+
+### Fixed
+
+- **It no longer stands there while something beats on it.** Rare, but real, and it had four
+  separate causes.
+
+  The scan that answers "what is attacking me?" was the only one of its kind in the plugin that
+  never checked whether the thing it found was an *enemy*. Friendly allied NPCs count as
+  combatants, and an ally healer targets **you** in order to heal you, so it could be picked as
+  "the aggressor" and hard targeted on every single tick while the mob actually hitting you was
+  never touched. The same scan also only looked for enemies targeting *you*, so the moment a mob
+  switched to your chocobo it became invisible: the run decided nothing was attacking, turned the
+  rotation off, and walked on. You cannot mount in combat, so it walked.
+
+- **An add that pulls from range is now chased down.** Standing in melee of a relic mob when
+  something ranged aggroes from a ledge or a neighbouring tier, the run would target and mark the
+  archer but keep its footwork planted on the relic mob, so it closed on neither and attacked
+  neither. The approach is now decided for whatever it is actually fighting.
+
+- **An unreachable attacker no longer pins the run forever.** The guard that gives up on a mob it
+  cannot path to, and moves on to one it can, was having its clock reset on every combat tick, so
+  in the one case that mattered it could never fire.
+
+- **Leve enemies no longer get stuck at "targeted but never swung at".** The leve fight used a
+  single 4 yalm threshold, so a mob drifting across it switched the rotation off and back on each
+  time. Under BossMod Reborn that tears the preset down and rebuilds it, so no attack ever
+  completed. It now uses the same engage/disengage band as the main grind.
+
+- **Waiting, walking and staging now defend themselves.** Waiting for a FATE to spawn, walking to
+  a treasure map dig site, standing between FATE waves, holding at a leve anchor: none of these
+  read combat state at all, and none of their target scans can see an ordinary overworld enemy
+  (a FATE scan matches only that FATE's mobs, a leve scan only that leve's). So anything that
+  wandered over and aggroed was ignored indefinitely. All of them now fight back first, and their
+  timeouts pause while they do, so a fight cannot make a step fail for the wrong reason.
+
 ## 1.5.4.0 — Stop flying away from a FATE that is already up
 
 ### Fixed

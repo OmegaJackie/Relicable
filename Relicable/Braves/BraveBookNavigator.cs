@@ -147,16 +147,7 @@ public static class BraveBookNavigator
     private static float FlatDistance(Vector3 a, Vector3 b)
         => Vector3.Distance(new Vector3(a.X, 0f, a.Z), new Vector3(b.X, 0f, b.Z));
 
-    private static uint MapIdForTerritory(uint territory)
-    {
-        try
-        {
-            return territory == 0
-                ? 0u
-                : Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territory)?.Map.RowId ?? 0u;
-        }
-        catch { return 0u; }
-    }
+    private static uint MapIdForTerritory(uint territory) => Locations.MapForTerritory(territory);
 
     // A dungeon (ContentType 2) ContentFinderCondition for a territory, or 0. Used to open the Duty
     // Finder for a book's dungeon slot, which has no open-world location to flag.

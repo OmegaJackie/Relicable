@@ -58,6 +58,9 @@ public sealed class TreasureMapExecutor : ITaskExecutor
     private long _lastDiag;
     private bool _deciphered;
     private bool _resupplyDecipherFired; // mid-restock: we have triggered the free-slot decipher
+    // CombatAssist.DefendSelf's per-caller latch: the id we last armed the backend for, so the
+    // mode is re-sent only when the aggressor changes and never per tick.
+    private ulong _defendArmedId;
     private long _resupplyDecipherAt;    // when we fired it, so a decipher that did not take is retried
     private Vector3? _handledFlag; // the last flag we already looted, to ignore it as stale
     private uint _alexandriteId;
@@ -69,6 +72,7 @@ public sealed class TreasureMapExecutor : ITaskExecutor
         _alexandriteId = step.ItemId != 0 ? step.ItemId : NovusData.AlexandriteItemId;
         _handledFlag = null;
         _resupplyDecipherFired = false;
+        _defendArmedId = 0; // executors are singletons; a stale latch would suppress the re-arm
         _npc.Reset();
         EnterPhase(Phase.NeedMap);
         ctx.TextAdvance.Enable(); // carry the decipher confirm and the loot prompt
@@ -116,6 +120,23 @@ public sealed class TreasureMapExecutor : ITaskExecutor
             ctx.Navmesh.Stop();
             ctx.Rotation.Disable();
             return ExecutorStatus.Failed;
+        }
+
+        // Self-defense for every phase that is NOT already a fight. Open and Fight run their own
+        // combat handling (Fight reads InCombat and targets the coffer guardians); the rest --
+        // restocking, deciphering, walking to the flag, digging -- never read combat state at all,
+        // so an ambient hostile that aggroed on the long walk in was never targeted and the loop
+        // kept calling Rotation.Disable() while it hit us. Re-mounting is blocked in combat
+        // (Mount.cs), so that walk finishes on foot and cannot outrun it either.
+        //
+        // Freeze the phase clock while defending, or a long fight burns PhaseTimeoutMs and the step
+        // fails as "phase timed out" for the wrong reason. The per-phase DecipherWaitMs / DigWaitMs
+        // waits read the same clock, so they are frozen with it.
+        if (_phase is not (Phase.Open or Phase.Fight)
+            && Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+        {
+            _phaseStart = Environment.TickCount64;
+            return ExecutorStatus.InProgress;
         }
 
         switch (_phase)

@@ -410,10 +410,18 @@ public sealed class ConfigWindow : Window
             _config.MaxMateriaStats = maxStats;
             _dirty = true;
         }
-        Checkbox("Pull materia from retainers", _config.AutoWithdrawFromRetainers,
+        Checkbox("Keep gear sets on the current relic", _config.SyncGearsetToLatestRelic,
+            v => _config.SyncGearsetToLatestRelic = v);
+        Ui.Tooltip("Each upgrade replaces the relic with a new item, so a gear set that named the old one " +
+            "comes up with an empty main hand afterwards.\n\n" +
+            "When on, the gear set you are wearing is updated to the new weapon after an upgrade -- only " +
+            "when it is for the job you are on and nothing but the weapon would change.");
+
+        Checkbox("Pull items from retainers", _config.AutoWithdrawFromRetainers,
             v => _config.AutoWithdrawFromRetainers = v);
-        Ui.Tooltip("'Fetch from Retainer' in the Novus planner drives the summoning bell itself, cycling " +
-            "through every retainer and pulling the route's materia into your bags.\n\n" +
+        Ui.Tooltip("The 'Fetch from retainers' actions (Novus route materia, Braves shopping list) drive the " +
+            "summoning bell themselves, cycling through every retainer and pulling what is needed into your " +
+            "bags.\n\n" +
             "Turn off to only list what to withdraw.");
 
         ImGui.Separator();

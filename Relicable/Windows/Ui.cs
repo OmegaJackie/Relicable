@@ -9,8 +9,14 @@ internal static class Ui
     // Wrapped hover tooltip for the last item. ImGui.SetTooltip never wraps, so a long
     // string renders as one screen-wide line; this caps the tooltip at a readable width.
     public static void Tooltip(string text)
+        => Tooltip(text, false);
+
+    // whenDisabled: also show the tooltip for a BeginDisabled()'d item. ImGui suppresses hover
+    // on disabled items by default, which silently swallows exactly the tooltip that explains
+    // WHY the control is disabled -- pass true wherever that is the point of the hover text.
+    public static void Tooltip(string text, bool whenDisabled)
     {
-        if (!ImGui.IsItemHovered())
+        if (!ImGui.IsItemHovered(whenDisabled ? ImGuiHoveredFlags.AllowWhenDisabled : ImGuiHoveredFlags.None))
             return;
         ImGui.BeginTooltip();
         ImGui.PushTextWrapPos(ImGui.GetFontSize() * 24f);

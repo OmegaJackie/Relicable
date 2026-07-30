@@ -52,7 +52,7 @@ changes between builds. Bug reports with a debug log attached are genuinely usef
 | **Animus** (Trials of the Braves) | Buys each book, then works its enemy, dungeon, FATE and leve entries — including FATEs that must be started by talking to an NPC, and FATEs gated behind a predecessor FATE. |
 | **Novus** | A cheapest-route materia optimizer over the Sphere Scroll rules, priced live from Universalis, sourcing materia from your bags and retainers. Includes an Alexandrite treasure-map farm. |
 | **Nexus** | Reads the real 0/2000 Light gauge off the equipped relic and farms a configurable duty until it fills. |
-| **Braves** (iLvl 125) | Plans the material quests and runs their dungeons. |
+| **Braves** (iLvl 125) | Plans the material quests and runs their dungeons. The shopping list is priced live from Universalis and can pull any material — one item, one group, or the whole list — out of your retainers. |
 | **Zeta** | Reads the 12-Mahatma tracker off the equipped weapon and runs the farm-and-attach loop. |
 
 ## Installing
@@ -83,7 +83,8 @@ Relicable orchestrates other plugins rather than reimplementing them. Install th
 own repositories — `/relic config` → **Dependencies** shows live status and has copy-repo
 buttons for each.
 
-**Required:**
+**Required.** Relicable will not start without these, and each one owns a part of the line that has
+no fallback — removing any of them breaks the automation cycle rather than degrading it:
 
 - **vnavmesh** — all movement and pathfinding.
 - **A combat backend**, one of:
@@ -95,16 +96,24 @@ buttons for each.
   it unloads, and Wrath's own window marks which settings Relicable is driving. By default Relicable
   clears Wrath's in-combat gating so the rotation will open on a *neutral* relic-note enemy — you can
   turn that off in `/relic config` to keep your Wrath setup untouched.
+- **AutoDuty** — everything that happens inside an instance: the base-relic trials, the Animus book
+  dungeons, the Braves dungeons, and the Nexus/Zeta duty farms. Handing the duty to AutoDuty *is*
+  the mechanism — without it those steps fail outright, and a large part of the relic line simply
+  cannot run.
+- **Lifestream** — city and aethernet travel. The aethernet hop step is a direct Lifestream call
+  with nothing behind it.
+- **TextAdvance** — dialogue and quest turn-ins. Enable it globally. Individual steps do drive
+  dialogue themselves if it is missing, but it is required to start and the run is markedly slower
+  and more stall-prone without it.
 
-**Strongly recommended:**
-
-- **TextAdvance** — dialogue and quest turn-ins. Enable it globally.
-- **AutoDuty** — everything that happens inside an instance.
-- **Lifestream** — city and aethernet travel.
+Each has an on/off switch in `/relic config` → Companions. Turning one off stops it blocking
+Start — which is the escape hatch if you want to drive that part yourself — but the steps that
+depend on it will fail.
 
 **Optional:**
 
-- **AutoRetainer** — lets the Novus planner see materia held on your retainers.
+- **AutoRetainer** — lets the Novus and Braves planners see what your retainers hold, and is paused
+  automatically while Relicable drives the bell itself.
 - **Artisan** — builds a crafting list for the base relic's class-weapon step.
 - **Croizat's Bundle of Tweaks** — an alternative Atma FATE-farm backend.
 

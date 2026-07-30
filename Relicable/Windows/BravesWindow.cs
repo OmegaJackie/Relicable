@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Text;
@@ -28,6 +29,7 @@ public sealed class BravesWindow : Window
     private readonly Configuration _config;
     private readonly BravesPlanner _planner;
     private readonly ArtisanIpc _artisan;
+    private readonly RetainerFetchRunner _fetch;
     private readonly Action _saveConfig;
 
     // The plan is memoized (NovusWindow's MaybeRecompute pattern): rebuilding all ~38
@@ -39,14 +41,16 @@ public sealed class BravesWindow : Window
     private DateTime _planPriceStamp = DateTime.MinValue;
     private const long RecomputeMs = 500;
 
-    public BravesWindow(Configuration config, BravesPlanner planner, ArtisanIpc artisan, Action saveConfig)
+    public BravesWindow(Configuration config, BravesPlanner planner, ArtisanIpc artisan,
+        RetainerFetchRunner fetch, Action saveConfig)
         : base("Relicable Braves")
     {
-        Size = new Vector2(720, 620);
+        Size = new Vector2(820, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
         _config = config;
         _planner = planner;
         _artisan = artisan;
+        _fetch = fetch;
         _saveConfig = saveConfig;
     }
 
@@ -66,16 +70,102 @@ public sealed class BravesWindow : Window
         ImGui.Separator();
         DrawControls();
         ImGui.Separator();
+        DrawRetainerActions(plan);
+        ImGui.Separator();
         DrawPriceStatus();
         ImGui.Separator();
         DrawTotals(plan);
         ImGui.Separator();
         DrawCraftables(plan);
-        DrawGroup(plan, BravesSource.VendorGil, "Gil vendor items (100,000 gil each)");
-        DrawGroup(plan, BravesSource.VendorSeals, "Grand Company seals (Bombard Core)");
-        DrawGroup(plan, BravesSource.VendorPoetics, "Poetics (Sacred Spring Water)");
-        DrawGroup(plan, BravesSource.DesynthSource, "Desynthesis sources (only if crafting; 3,000 gil each)");
-        DrawGroup(plan, BravesSource.DungeonDrop, "Dungeon drops (must be farmed)");
+        DrawGroup(plan, BravesSource.VendorGil, "Gil vendor items (100,000 gil each)", "the gil-vendor items");
+        DrawGroup(plan, BravesSource.VendorSeals, "Grand Company seals (Bombard Core)", "the seal items");
+        DrawGroup(plan, BravesSource.VendorPoetics, "Poetics (Sacred Spring Water)", "the Poetics items");
+        DrawGroup(plan, BravesSource.DesynthSource, "Desynthesis sources (only if crafting; 3,000 gil each)", "the desynthesis sources");
+        DrawGroup(plan, BravesSource.DungeonDrop, "Dungeon drops (must be farmed)", string.Empty);
+    }
+
+    // "Fetch from retainers" for the whole shopping list, plus the shared auto-pull mode and the
+    // engine's status line. Individual rows and each group have their own buttons further down --
+    // one retainer trip for everything, or a targeted pull for one item.
+    private void DrawRetainerActions(BravesPlan plan)
+    {
+        ImGui.TextDisabled("Retainers");
+
+        var fetchAll = plan.Lines.Where(l => l.ItemId != 0 && l.Need > 0).ToList();
+        if (fetchAll.Count == 0)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Fetch all from retainers"))
+            StartFetch(fetchAll, "the Braves materials");
+        if (fetchAll.Count == 0)
+            ImGui.EndDisabled();
+        Ui.Tooltip(fetchAll.Count == 0
+            ? "Nothing outstanding: every market/vendor material on this list is already in your bags."
+            : "Open a summoning bell, then click: Relicable visits each retainer in turn and retrieves every " +
+              "still-needed material it holds.\n\n" +
+              $"{fetchAll.Count} material(s) outstanding; the last retainer scan saw {plan.FetchableLines} of them " +
+              "on a retainer. The dungeon drops are key items and can never be on a retainer.",
+            whenDisabled: true);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Stop##fetch"))
+            _fetch.Stop();
+        Ui.Tooltip("Stop the retainer fetch. It leaves the retainer UI where it is; close it yourself.");
+
+        ImGui.SameLine();
+        var autoWithdraw = _config.AutoWithdrawFromRetainers;
+        if (ImGui.Checkbox("Pull items automatically", ref autoWithdraw))
+        {
+            _config.AutoWithdrawFromRetainers = autoWithdraw;
+            _saveConfig();
+        }
+        Ui.Tooltip("On: the fetch drives the bell and retrieves the stacks itself.\n" +
+            "Off: nothing is moved -- open a retainer and the status line lists what to drag out.\n\n" +
+            "Shared with the Novus planner's fetch.");
+
+        Ui.Wrapped(_fetch.Busy ? Yellow : Grey, "Status: " + _fetch.Status);
+    }
+
+    // Hand a set of rows to the shared retainer engine. Needs are the TOTAL quantity each material
+    // wants held (the engine subtracts what is already in the bags live), so a fetch stops the moment
+    // the bags are stocked. Key-item rows (dungeon drops) carry no Item id and are skipped.
+    private void StartFetch(IEnumerable<BravesLine> lines, string what)
+    {
+        var needs = new Dictionary<uint, int>();
+        foreach (var l in lines)
+        {
+            if (l.ItemId == 0 || l.Need <= 0)
+                continue;
+            needs[l.ItemId] = needs.GetValueOrDefault(l.ItemId) + l.Material.Quantity;
+        }
+        _fetch.Start(needs, what, BravesData.GameName,
+            () => _config.RetainerBravesItems.Retainers.Values
+                .Select(r => new RetainerFetchRunner.RetainerStock(r.RetainerName, r.Items)));
+    }
+
+    // Per-row fetch: pulls just this material out of whichever retainer holds it. Shown for every
+    // Item-sheet row; key items (dungeon drops) never reach here.
+    private void DrawFetchButton(BravesLine line)
+    {
+        if (line.ItemId == 0)
+        {
+            ImGui.TextDisabled("-");
+            Ui.Tooltip("A key item -- key items cannot be entrusted to a retainer.");
+            return;
+        }
+        if (line.Need <= 0)
+        {
+            ImGui.TextColored(Green, "done");
+            return;
+        }
+        if (ImGui.SmallButton($"Fetch##fetch{line.ItemId}"))
+            StartFetch(new[] { line }, $"{line.Need}x {DisplayName(line)}");
+        Ui.Tooltip(line.OnRetainers > 0
+            ? $"Open a summoning bell, then click: retrieve {line.Need}x {DisplayName(line)} " +
+              $"(the last scan saw {line.OnRetainers} on your retainers).\n\n" +
+              "The game retrieves whole stacks, so you may get more than the quantity needed."
+            : "Open a summoning bell, then click: Relicable checks every retainer for this item.\n\n" +
+              "No retainer scan has seen it yet -- open each retainer once at a bell (or let AutoRetainer " +
+              "run) so the planner can show retainer stock without a trip.");
     }
 
     private void DrawControls()
@@ -148,6 +238,14 @@ public sealed class BravesWindow : Window
         ImGui.BulletText($"Dungeon drops to farm: {plan.DungeonDropsToFarm}");
         ImGui.BulletText($"Crafted items (buy HQ or craft): {plan.Craftables}   (if crafting, desynth sources add {Gil(plan.DesynthSourceGil)})");
 
+        // The totals count only what is in your BAGS as held, because that is what the quests
+        // consume -- so anything sitting on a retainer is still being counted as "buy this".
+        // Say so, rather than quietly folding retainer stock into a number you would then have
+        // to fetch anyway.
+        if (plan.FetchableLines > 0)
+            ImGui.TextColored(Yellow,
+                $"{plan.FetchableLines} still-needed material(s) are on your retainers -- fetch them instead of buying.");
+
         if (plan.Unpriced > 0)
             ImGui.TextColored(Yellow, $"{plan.Unpriced} tradable item(s) have no current listing, so the market total understates.");
         if (!plan.PricesReady)
@@ -171,9 +269,12 @@ public sealed class BravesWindow : Window
         ImGui.TextColored(_artisan.Available ? Green : Grey,
             _artisan.Available ? (_artisan.IsBusy() ? "Artisan: busy" : "Artisan: ready") : "Artisan: not installed");
 
-        var craftRows = plan.Lines.Count(l => l.Material.Source == BravesSource.Craft);
-        var craftSize = new Vector2(0f, (craftRows + 2.5f) * ImGui.GetTextLineHeightWithSpacing());
-        if (!ImGui.BeginTable("braves_craft", 7,
+        var craftLines = plan.Lines.Where(l => l.Material.Source == BravesSource.Craft).ToList();
+        ImGui.SameLine();
+        DrawGroupFetchButton(craftLines, "the crafted items", "craft");
+
+        var craftSize = new Vector2(0f, (craftLines.Count + 2.5f) * ImGui.GetTextLineHeightWithSpacing());
+        if (!ImGui.BeginTable("braves_craft", 9,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingFixedFit |
                 ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX, craftSize))
             return;
@@ -181,13 +282,15 @@ public sealed class BravesWindow : Window
         ImGui.TableSetupColumn("Item");
         ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 44);
         ImGui.TableSetupColumn("Have", ImGuiTableColumnFlags.WidthFixed, 44);
+        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 62);
         ImGui.TableSetupColumn("HQ unit", ImGuiTableColumnFlags.WidthFixed, 90);
         ImGui.TableSetupColumn("HQ line", ImGuiTableColumnFlags.WidthFixed, 90);
         ImGui.TableSetupColumn("Crafter", ImGuiTableColumnFlags.WidthFixed, 96);
         ImGui.TableSetupColumn("Craft", ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn("Fetch", ImGuiTableColumnFlags.WidthFixed, 62);
         ImGui.TableHeadersRow();
 
-        foreach (var line in plan.Lines.Where(l => l.Material.Source == BravesSource.Craft))
+        foreach (var line in craftLines)
         {
             ImGui.TableNextRow();
 
@@ -200,6 +303,9 @@ public sealed class BravesWindow : Window
 
             ImGui.TableNextColumn();
             ImGui.TextColored(line.Have > 0 ? Green : Grey, line.Have.ToString());
+
+            ImGui.TableNextColumn();
+            DrawRetainerCount(line);
 
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.UnitMarket.HasValue ? Gil(line.UnitMarket.Value) : "-");
@@ -215,9 +321,46 @@ public sealed class BravesWindow : Window
 
             ImGui.TableNextColumn();
             DrawCraftButton(line);
+
+            ImGui.TableNextColumn();
+            DrawFetchButton(line);
         }
 
         ImGui.EndTable();
+    }
+
+    // "Fetch group from retainers" for one section of the list. Disabled (with the reason in the
+    // tooltip) when the group has nothing outstanding that could live on a retainer.
+    private void DrawGroupFetchButton(IReadOnlyList<BravesLine> lines, string what, string id)
+    {
+        var outstanding = lines.Where(l => l.ItemId != 0 && l.Need > 0).ToList();
+        if (outstanding.Count == 0)
+            ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"Fetch group##fetchgrp{id}"))
+            StartFetch(outstanding, what);
+        if (outstanding.Count == 0)
+            ImGui.EndDisabled();
+        Ui.Tooltip(outstanding.Count == 0
+            ? "Nothing outstanding in this group."
+            : $"Open a summoning bell, then click: retrieve this group's {outstanding.Count} outstanding " +
+              "material(s) from whichever retainers hold them.",
+            whenDisabled: true);
+    }
+
+    // The "Retainer" cell: what the last bell scan saw on retainers. A snapshot, so 0 means
+    // "not seen", not "definitely none" -- the fetch still checks every retainer.
+    private void DrawRetainerCount(BravesLine line)
+    {
+        if (line.ItemId == 0)
+        {
+            ImGui.TextDisabled("-");
+            return;
+        }
+        ImGui.TextColored(line.OnRetainers > 0 ? Green : Grey, line.OnRetainers.ToString());
+        Ui.Tooltip(line.OnRetainers > 0
+            ? $"{line.OnRetainers} on your retainers at the last scan. Use Fetch to pull them into your bags."
+            : "No retainer scan has seen this item. Open each retainer at a summoning bell once (or let " +
+              "AutoRetainer run) to record what they hold.");
     }
 
     private void DrawCraftButton(BravesLine line)
@@ -244,7 +387,9 @@ public sealed class BravesWindow : Window
             "Requires the materials and a levelled crafter.");
     }
 
-    private void DrawGroup(BravesPlan plan, BravesSource source, string title)
+    // fetchWhat names this group in the fetch status line; empty means the group can never be on
+    // a retainer (the key-item dungeon drops), which also drops its Retainer and Fetch columns.
+    private void DrawGroup(BravesPlan plan, BravesSource source, string title, string fetchWhat)
     {
         var lines = plan.Lines.Where(l => l.Material.Source == source).ToList();
         if (lines.Count == 0)
@@ -255,10 +400,16 @@ public sealed class BravesWindow : Window
             return;
 
         // Untradable groups (dungeon drops) have no market price, so drop the Market and Native
-        // cost columns and show just what is needed and where to get it.
+        // cost columns and show just what is needed and where to get it. They are key items, so
+        // they get no retainer columns either.
         var tradable = source != BravesSource.DungeonDrop;
+        var fetchable = fetchWhat.Length > 0;
+        if (fetchable)
+            DrawGroupFetchButton(lines, fetchWhat, source.ToString());
+
+        var columns = 4 + (tradable ? 2 : 0) + (fetchable ? 2 : 0);
         var size = new Vector2(0f, (lines.Count + 2.5f) * ImGui.GetTextLineHeightWithSpacing());
-        if (!ImGui.BeginTable($"braves_{source}", tradable ? 6 : 4,
+        if (!ImGui.BeginTable($"braves_{source}", columns,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingFixedFit |
                 ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX, size))
             return;
@@ -266,12 +417,16 @@ public sealed class BravesWindow : Window
         ImGui.TableSetupColumn("Item");
         ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 44);
         ImGui.TableSetupColumn("Have", ImGuiTableColumnFlags.WidthFixed, 44);
+        if (fetchable)
+            ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 62);
         if (tradable)
         {
             ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 90);
             ImGui.TableSetupColumn("Native cost", ImGuiTableColumnFlags.WidthFixed, 120);
         }
         ImGui.TableSetupColumn("Where");
+        if (fetchable)
+            ImGui.TableSetupColumn("Fetch", ImGuiTableColumnFlags.WidthFixed, 62);
         ImGui.TableHeadersRow();
 
         foreach (var line in lines)
@@ -288,6 +443,12 @@ public sealed class BravesWindow : Window
             ImGui.TableNextColumn();
             ImGui.TextColored(line.Have > 0 ? Green : Grey, line.Have.ToString());
 
+            if (fetchable)
+            {
+                ImGui.TableNextColumn();
+                DrawRetainerCount(line);
+            }
+
             if (tradable)
             {
                 ImGui.TableNextColumn();
@@ -299,6 +460,12 @@ public sealed class BravesWindow : Window
 
             ImGui.TableNextColumn();
             DrawWhere(line);
+
+            if (fetchable)
+            {
+                ImGui.TableNextColumn();
+                DrawFetchButton(line);
+            }
         }
 
         ImGui.EndTable();
@@ -335,13 +502,19 @@ public sealed class BravesWindow : Window
     // clipboard on click (handy for the market board search). Quantity suffix and tooltip vary.
     private static void DrawItemName(BravesLine line, string quantitySuffix, string tooltip)
     {
-        var name = BravesData.GameName(line.ItemId);
-        if (string.IsNullOrEmpty(name))
-            name = line.Material.ItemName;
+        var name = DisplayName(line);
         if (ImGui.Selectable($"{name}{quantitySuffix}##copy{line.Material.ItemName}"))
             ImGui.SetClipboardText(name);
         if (tooltip.Length > 0)
             Ui.Tooltip(tooltip);
+    }
+
+    // The canonical in-game name for a row, falling back to the catalog's own spelling for
+    // anything that did not resolve (and for the key-item drops, which carry no Item id).
+    private static string DisplayName(BravesLine line)
+    {
+        var name = BravesData.GameName(line.ItemId);
+        return string.IsNullOrEmpty(name) ? line.Material.ItemName : name;
     }
 
     private static string NativeCost(BravesMaterial m) => m.Source switch

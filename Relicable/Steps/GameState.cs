@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Relicable.Data;
+using Relicable.Diagnostics;
 using Relicable.Model;
 
 namespace Relicable.Steps;
@@ -792,9 +793,21 @@ public static unsafe class GameState
         return false;
     }
 
-    // Move an equipped weapon (slot 0 main / 1 off) out of the hands into a free armoury or bag
-    // slot, so it becomes UNEQUIPPED -- Jalzahn's Zenith enhancement lists only unequipped relics.
-    // Prefers the matching armoury weapon container, then the four bags. False if nothing moved.
+    // Get the weapon in an equipped slot (0 main / 1 off) OFF the character, so it counts as
+    // UNEQUIPPED -- Jalzahn's enhancements and the quest hand-overs list only unequipped relics.
+    // False when nothing could be moved.
+    //
+    // THE MAIN HAND CANNOT BE EMPTIED. This used to move the weapon out to a free armoury/bag slot
+    // for both hands, which is correct for the off hand and IMPOSSIBLE for the main one: FFXIV has
+    // no bare-handed state, so the server simply refuses the move. It failed silently -- no error,
+    // nothing in the log, MoveItemSlot does not report it -- so the relic stayed on, the trade
+    // window listed nothing, and the step waited out its timer. That is the reported "cannot
+    // unequip a weapon".
+    //
+    // The main hand therefore SWAPS instead: put another weapon on and the relic is displaced into
+    // the armoury, which is the same end state. See TryFindSwapWeapon for how the replacement is
+    // chosen. The off hand keeps the move-out (an empty off hand is legal), and falls back to a
+    // swap if there is nowhere to put it.
     public static bool TryUnequipWeapon(ushort equipSlot)
     {
         var im = InventoryManager.Instance();
@@ -806,6 +819,36 @@ public static unsafe class GameState
         var src = eq->GetInventorySlot(equipSlot);
         if (src == null || src->ItemId == 0)
             return false;
+        var wornId = src->ItemId;
+
+        // Off hand first: it can legally be left empty, so the plain move-out is tried for it.
+        if (equipSlot == 1 && TryMoveOutOfHands(im, equipSlot))
+            return true;
+
+        // Main hand (or an off hand with nowhere to go): displace it by equipping something else.
+        if (!TryFindSwapWeapon(wornId, equipSlot, out var container, out var slot, out var swapId))
+        {
+            DebugLog.Warn($"Cannot take off '{ItemName(wornId)}': this job owns no other " +
+                          $"{(equipSlot == 1 ? "off-hand item" : "weapon")} to put on in its place, and the game " +
+                          "does not allow an empty main hand. Buy or retrieve any other weapon for this job " +
+                          "(a vendor one is fine) and run it again.");
+            return false;
+        }
+
+        try
+        {
+            im->MoveItemSlot(container, slot, InventoryType.EquippedItems, equipSlot);
+            DebugLog.Info($"Swapped '{ItemName(swapId)}' into the {(equipSlot == 1 ? "off" : "main")} hand so " +
+                          $"'{ItemName(wornId)}' comes off (the main hand cannot be emptied).");
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // The original behaviour: move the equipped item out to the first free armoury/bag slot. Only
+    // legal for the off hand.
+    private static bool TryMoveOutOfHands(InventoryManager* im, ushort equipSlot)
+    {
         var targets = equipSlot == 1
             ? new[] { InventoryType.ArmoryOffHand, InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4 }
             : new[] { InventoryType.ArmoryMainHand, InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4 };
@@ -827,6 +870,120 @@ public static unsafe class GameState
         return false;
     }
 
+    // Containers a stand-in weapon can be pulled from: the armoury chest slot for that hand first
+    // (where spare weapons live), then the bags.
+    private static readonly InventoryType[] SwapSourcesMain =
+    {
+        InventoryType.ArmoryMainHand,
+        InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
+    };
+
+    private static readonly InventoryType[] SwapSourcesOff =
+    {
+        InventoryType.ArmoryOffHand,
+        InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
+    };
+
+    // Pick a NON-relic item this job can wear in `equipSlot`, to stand in while the relic is off.
+    //
+    // The EquipSlotCategory must match the relic's exactly (a shield cannot stand in for a sword,
+    // and a two-handed weapon cannot stand in for a one-handed one). The JOB test is a flag lookup
+    // on the candidate's ClassJobCategory, not a comparison against the relic's own category --
+    // that shortcut looks right and is not: a relic carries the job-only category (Curtana is
+    // "PLD", row 20) while ordinary gear carries the class+job one ("GLA PLD", row 38), so
+    // comparing the two rows matches nothing and no swap would ever be found.
+    //
+    // Getting this wrong is silent: the game refuses a wrong-job equip without an error (the same
+    // trap documented on TryFindRelicInBags), so a bad pick would leave the relic on with nothing
+    // to show for it. The highest item level wins, so if a restore ever fails the character is left
+    // holding the best weapon it owns rather than a level-1 one.
+    private static bool TryFindSwapWeapon(uint wornId, ushort equipSlot,
+        out InventoryType container, out ushort slot, out uint itemId)
+    {
+        container = default;
+        slot = 0;
+        itemId = 0;
+
+        var items = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+        if (items.GetRowOrDefault(wornId) is not { } worn)
+            return false;
+        var wantSlot = worn.EquipSlotCategory.RowId;
+        var fallbackJob = worn.ClassJobCategory.RowId;
+        var job = ActiveClassJobId();
+        var level = ActiveJobLevel();
+
+        var im = InventoryManager.Instance();
+        if (im == null)
+            return false;
+
+        var bestIlvl = -1;
+        foreach (var bag in equipSlot == 1 ? SwapSourcesOff : SwapSourcesMain)
+        {
+            var c = im->GetInventoryContainer(bag);
+            if (c == null || !c->IsLoaded)
+                continue;
+            for (ushort i = 0; i < c->Size; i++)
+            {
+                var s = c->GetInventorySlot(i);
+                if (s == null || s->ItemId == 0 || s->ItemId == wornId)
+                    continue;
+                // Never stand in with another relic: it would be the next stage's turn-in item, or
+                // another job's line, and either way it is not a neutral placeholder.
+                if (IsRelicWeaponId(s->ItemId))
+                    continue;
+                if (items.GetRowOrDefault(s->ItemId) is not { } cand)
+                    continue;
+                if (cand.EquipSlotCategory.RowId != wantSlot)
+                    continue;
+                // Unknown job -> fall back to the relic's own category, which is at least never wrong.
+                if (!(CategoryAllowsJob(cand.ClassJobCategory.RowId, job)
+                      ?? cand.ClassJobCategory.RowId == fallbackJob))
+                    continue;
+                if (level > 0 && cand.LevelEquip > level)
+                    continue;
+                var ilvl = (int)cand.LevelItem.RowId;
+                if (ilvl <= bestIlvl)
+                    continue;
+                bestIlvl = ilvl;
+                container = bag;
+                slot = i;
+                itemId = s->ItemId;
+            }
+        }
+        return itemId != 0;
+    }
+
+    // Does a ClassJobCategory permit this ClassJob? Null when the job is not one we map, so the
+    // caller can fall back rather than treat "unknown" as "no".
+    //
+    // The category rows carry one flag per class/job abbreviation ("GLA PLD" sets GLA and PLD;
+    // "Disciple of War" sets nineteen), so the test is simply the flag for the job we are on. It is
+    // done through the typed properties rather than by parsing the category's NAME because that
+    // name is localised -- a non-English client would match nothing, the same way the hardcoded
+    // English materia names once did.
+    private static bool? CategoryAllowsJob(uint categoryRow, uint classJobId)
+    {
+        if (categoryRow == 0 || classJobId == 0)
+            return null;
+        if (Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.ClassJobCategory>()
+                .GetRowOrDefault(categoryRow) is not { } c)
+            return null;
+        // Both the base class and the job, so this holds whichever the character is on.
+        return classJobId switch
+        {
+            1 => c.GLA, 19 => c.PLD,
+            3 => c.MRD, 21 => c.WAR,
+            2 => c.PGL, 20 => c.MNK,
+            4 => c.LNC, 22 => c.DRG,
+            29 => c.ROG, 30 => c.NIN,
+            5 => c.ARC, 23 => c.BRD,
+            7 => c.THM, 25 => c.BLM,
+            26 => c.ACN, 27 => c.SMN, 28 => c.SCH,
+            6 => c.CNJ, 24 => c.WHM,
+            _ => null,
+        };
+    }
+
     // Best-effort equip of a weapon from a bag/armoury slot into the main hand. MoveItemSlot is
     // the standard bag->equipped path (the documented crash is retainer<->player only); wrapped
     // so a failure cannot take down the run. The caller verifies via EquippedRelicStage.
@@ -835,8 +992,33 @@ public static unsafe class GameState
         var im = InventoryManager.Instance();
         if (im == null)
             return;
-        try { im->MoveItemSlot(container, slot, InventoryType.EquippedItems, 0); }
+        // Which hand the item belongs in. This used to be hardcoded to the MAIN hand at every call
+        // site, which is wrong for the Paladin's Holy Shield -- the one relic that lives in the off
+        // hand. The game refuses a shield sent to the main hand silently, so every "put it back"
+        // path looked like it ran while the shield stayed off.
+        var src = im->GetInventoryContainer(container);
+        var item = src == null ? null : src->GetInventorySlot(slot);
+        var dest = item == null ? (ushort)0 : EquipSlotForItem(item->ItemId);
+        try { im->MoveItemSlot(container, slot, InventoryType.EquippedItems, dest); }
         catch { /* best-effort; verified by the caller */ }
+    }
+
+    // The equipped-container slot an item belongs to: 1 for something that only goes in the off
+    // hand, 0 otherwise. Only the two weapon slots matter here -- nothing in the relic line equips
+    // armour or accessories.
+    private static ushort EquipSlotForItem(uint itemId)
+    {
+        if (itemId == 0)
+            return 0;
+        try
+        {
+            var cat = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>()
+                .GetRowOrDefault(itemId)?.EquipSlotCategory.ValueNullable;
+            if (cat is { } c && c.OffHand > 0 && c.MainHand <= 0)
+                return 1;
+        }
+        catch { /* fall through to the main hand */ }
+        return 0;
     }
 
     // ---- Nexus light (read live from the equipped Novus relic) ----

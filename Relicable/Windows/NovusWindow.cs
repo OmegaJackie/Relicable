@@ -117,7 +117,7 @@ public sealed class NovusWindow : Window
         }
 
         var autoWithdraw = _config.AutoWithdrawFromRetainers;
-        if (ImGui.Checkbox("Pull materia from retainers", ref autoWithdraw))
+        if (ImGui.Checkbox("Pull items from retainers", ref autoWithdraw))
         {
             _config.AutoWithdrawFromRetainers = autoWithdraw;
             _saveConfig();
@@ -125,7 +125,7 @@ public sealed class NovusWindow : Window
         Ui.Tooltip("'Fetch from Retainer' drives the summoning bell itself, cycling through every retainer " +
             "and pulling the route's materia into your bags.\n\n" +
             "Turn off to only list what to withdraw. Either way the route shows retainer stock, and " +
-            "melding always sources from your bags.");
+            "melding always sources from your bags. Shared with the Braves planner's fetch buttons.");
 
         var alexTarget = _config.AlexandriteTarget;
         if (ImGui.InputInt("Alexandrite target", ref alexTarget))

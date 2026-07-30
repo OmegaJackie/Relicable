@@ -23,6 +23,14 @@ internal static unsafe class Companion
     private static long _lastTick;
     private static bool _stanceSet;
 
+    // The summoned chocobo's object id, or 0 when none is out. Handed to the aggressor scan
+    // (Targeting.FindNearestAggressor): a mob whose enmity has flipped onto the companion is
+    // still an enemy engaged with us, and the healer stance out-threats the player during any
+    // window where the rotation is off. Without it that mob was invisible and the kill loop
+    // travelled on with the rotation disabled while it kept hitting the chocobo.
+    public static ulong CompanionId()
+        => Plugin.Buddies.CompanionBuddy?.GameObject?.GameObjectId ?? 0;
+
     public static void EnsureReady(bool summon, bool healerStance)
     {
         if (!summon)

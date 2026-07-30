@@ -42,7 +42,16 @@ internal sealed unsafe class LeveRunner
     private enum LureResult { Approaching, Waiting, Fired, CannotUse }
 
     private const float ArriveRange = 5.0f;
-    private const float EngageRange = 4.0f;
+
+    // Combat distances live in Combat.EngageBand, shared with the kill grind and the FATE loop.
+    // It keeps the hysteresis those needed -- once engaged, keep fighting until the mob is beyond a
+    // looser band, because a single threshold made a mob wobbling across it flip between Disable()
+    // and EnableManual() every crossing, the Off/On cycle that stops the backend ever settling into
+    // its rotation (worse under BossMod Reborn, where Disable tears the active preset down and
+    // EnableManual rebuilds it, so no GCD lands) -- and adds the target's hitbox, which is what a
+    // target whose CENTRE never comes within 4y at all needs (a large-hitbox mob, or the leve-868
+    // charge sitting above its floor anchor); that case used to re-send Disable() forever while it
+    // hit us.
     private const long TimeoutMs = 300_000;
 
     // ---- Item-lure leves (e.g. "Don't Forget to Cry") ----
@@ -171,8 +180,18 @@ internal sealed unsafe class LeveRunner
         _resumeBeckon = false;
         _warnedNoHound = false;
         _engagedLeveId = 0;
+        _engagingLeve = false;
+        _defendArmedId = 0;
         _lastParchmentRead = 0;
     }
+
+    // True while we are committed to a leve objective inside the hysteresis band (see
+    // Combat.EngageBand). Cleared on Reset -- the runner is reused for every leve.
+    private bool _engagingLeve;
+
+    // CombatAssist.DefendSelf's per-caller latch: the id we last armed the backend for, so the
+    // mode is re-sent only when the aggressor changes and never per tick.
+    private ulong _defendArmedId;
 
     // Returns true when the accepted leve is finished (completed or given up).
     public bool Tick(ExecutionContext ctx)
@@ -432,7 +451,12 @@ internal sealed unsafe class LeveRunner
             return;
         }
 
-        // Nothing to fight. RSR off while we are not in combat.
+        // No leve objective loaded. "Nothing to fight" is not "nothing fighting US", though: an
+        // ambient overworld hostile that aggroed is not owned by the leve director, so
+        // FindNearestLeveObjective never returns it and this used to turn the rotation off and
+        // wander the anchor while it hit us. Defend first; only idle when genuinely unthreatened.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            return;
         ctx.Rotation.Disable();
 
         // Some battle leves -- the "Necrologos" family, e.g. Necrologos: Pale Oblation -- start with NO
@@ -546,6 +570,10 @@ internal sealed unsafe class LeveRunner
             return;
         }
 
+        // An ambient hostile is not director-owned, so no finder above sees it; fight it rather
+        // than holding at the anchor with the rotation off while it hits us.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            return;
         ctx.Rotation.Disable();
         if (Vector3.Distance(me, _pos) > ArriveRange)
             ctx.Navmesh.MoveCloseTo(_pos, false, ArriveRange - 1.0f);
@@ -617,7 +645,10 @@ internal sealed unsafe class LeveRunner
 
         // 2) No enemy loaded: travel to the nearest Destination marker on foot (Phase.Fight has
         //    grounded us; never fly). Getting within range springs the next ambush, which the kill
-        //    branch above then clears next tick.
+        //    branch above then clears next tick. An ambient hostile is not director-owned and so is
+        //    invisible to the finder above -- fight it instead of walking the route while it hits us.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            return;
         ctx.Rotation.Disable();
         if (ctx.Targeting.FindNearestInteractable(_destinationName) is { } dest)
         {
@@ -676,11 +707,18 @@ internal sealed unsafe class LeveRunner
         // 2) No attacker up (between waves): hold ON the charge so the next wave converges onto us. The
         //    charge is friendly, so it is found by name (like the escort hound), not by the hostile
         //    finders. On foot only -- Phase.Fight has grounded us; never fly here.
+        //    An ambient hostile is not director-owned either, so fight it first; DefendSelf stands and
+        //    fights where we are, so this does not abandon the charge.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            return;
         ctx.Rotation.Disable();
         if (ctx.Targeting.FindNamed(_protectionCharge) is { } charge)
         {
-            if (Vector3.Distance(me, charge.Position) > EngageRange)
-                ctx.Navmesh.MoveCloseTo(charge.Position, false, EngageRange - 1.0f);
+            // Deliberately the MELEE band even on a ranged job: the point of standing on the charge is
+            // to be where the next wave converges, so its attackers come to us. A caster standoff here
+            // would park us away from the thing we are meant to be body-blocking for.
+            if (Vector3.Distance(me, charge.Position) > Combat.EngageBand.Melee(charge))
+                ctx.Navmesh.MoveCloseTo(charge.Position, false, Combat.EngageBand.MeleeStop(charge));
             else
                 ctx.Navmesh.Stop();
             return;
@@ -741,14 +779,29 @@ internal sealed unsafe class LeveRunner
         var me = Plugin.ObjectTable.LocalPlayer?.Position ?? _pos;
         ctx.Targeting.SetTarget(target);
 
-        if (Vector3.Distance(me, target.Position) > EngageRange)
+        // Hysteresis band (see LeveDisengageRange): only a mob that genuinely moved away re-enters
+        // the travel branch and turns the backend off. The band itself comes from Combat.EngageBand,
+        // which sizes it to the TARGET'S HITBOX (the flat 4y was centre-to-centre, so a large mob's
+        // hull kept us permanently "not in range" of something we were standing on) and holds a
+        // ranged job at its own standoff instead of walking it into melee.
+        var dist = Vector3.Distance(me, target.Position);
+        var engage = Combat.EngageBand.Engage(target);
+        var stop = Combat.EngageBand.Stop(target);
+        if (dist > (_engagingLeve ? Combat.EngageBand.Disengage(target) : engage))
         {
+            _engagingLeve = false;
             ctx.Rotation.Disable();
-            ctx.Navmesh.MoveCloseTo(target.Position, false, EngageRange - 1.0f);
+            ctx.Navmesh.MoveCloseTo(target.Position, false, stop);
             return;
         }
 
-        ctx.Navmesh.Stop();
+        _engagingLeve = true;
+        // Inside the band but past melee: close ON FOOT with the rotation left ON. Disabling for a
+        // small drift correction is exactly the thrash this band exists to prevent.
+        if (dist > engage)
+            ctx.Navmesh.MoveCloseTo(target.Position, false, stop);
+        else
+            ctx.Navmesh.Stop();
         if (target.GameObjectId != _engagedLeveId)
         {
             _engagedLeveId = target.GameObjectId;
@@ -789,7 +842,17 @@ internal sealed unsafe class LeveRunner
             return;
         }
 
-        // No nearby threat: guide the hound. RSR off so it does not lock onto the (friendly)
+        // No nearby threat BY THE LEVE MARKER -- but that finder only matches director-owned objects,
+        // so an AoE-splash pull, a live FATE mob on the route, or a ranged ambusher holding beyond
+        // EscortEngageRange is invisible to it at any distance. Fight whatever is actually on us
+        // before dropping the rotation; the hound waits, and _resumeBeckon re-beckons it afterwards.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+        {
+            _resumeBeckon = true;
+            return;
+        }
+
+        // No threat at all: guide the hound. RSR off so it does not lock onto the (friendly)
         // hound once we target it.
         ctx.Rotation.Disable();
 

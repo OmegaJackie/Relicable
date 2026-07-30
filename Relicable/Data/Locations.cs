@@ -20,11 +20,26 @@ public static class Locations
     private static Dictionary<uint, uint>? _territoryAetheryte;
     private static Dictionary<uint, uint>? _placeNameTerritory;
 
-    // A teleportable aetheryte row id for a territory, or 0 if none.
+    // A teleportable aetheryte row id for a territory, or 0 if none. This is just "an" aetheryte in
+    // the zone (the lowest row id), so prefer NearestAetheryteToWorld when a destination is known --
+    // a two-aetheryte zone like Western La Noscea can otherwise land you at the far one.
     public static uint AetheryteForTerritory(uint territory)
     {
         EnsureMaps();
         return territory != 0 && _territoryAetheryte!.TryGetValue(territory, out var a) ? a : 0;
+    }
+
+    // The Map row for a territory, or 0. Needed by anything that converts between world and map
+    // coordinates (map flags, the aetheryte marker positions NearestAetheryteToWorld reads).
+    public static uint MapForTerritory(uint territory)
+    {
+        try
+        {
+            return territory == 0
+                ? 0u
+                : Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territory)?.Map.RowId ?? 0u;
+        }
+        catch { return 0u; }
     }
 
     // Human-readable label for a teleport destination: the aetheryte's own place name plus the zone
