@@ -66,9 +66,42 @@ public sealed class RelicController
     // Repeat-relic Animus restart guard. When a fresh Atma weapon carries a previous relic's stale,
     // complete last-book note, the engine auto-buys book 1 to start THIS weapon's book run. This holds
     // the equipped Atma weapon id it did that for, so the wrap fires ONCE per weapon: after the engine
-    // drives books 1..9 back to a complete note 9 on the SAME weapon, it stops for the manual Animus
-    // enhancement instead of re-buying book 1 forever. In-memory only (a game restart re-arms it).
-    private uint _animusWrapWeaponId;
+    // drives books 1..9 back to a complete note 9 on the SAME weapon, it runs the Animus enhancement
+    // instead of re-buying book 1 forever.
+    //
+    // PERSISTED (Configuration.AnimusBooksDrivenWeaponId), not a field. It used to be in-memory, and
+    // the gap that opened was the obvious one: finish book 9, reload the plugin (or restart the game),
+    // press Start -- the witness is gone, the note still reads complete, and the run buys book 1 and
+    // grinds all nine again. Written through a property so every existing assignment site persists.
+    private uint AnimusWrapWeaponId
+    {
+        get => _ctx.Config.AnimusBooksDrivenWeaponId;
+        set
+        {
+            if (_ctx.Config.AnimusBooksDrivenWeaponId == value)
+                return;
+            _ctx.Config.AnimusBooksDrivenWeaponId = value;
+            // Saved immediately rather than on Dispose: the whole failure this fixes is a session
+            // that ended without a clean shutdown between the last book and the next Start.
+            Plugin.PluginInterface.SavePluginConfig(_ctx.Config);
+        }
+    }
+
+    // The Atma weapon the enhancement flow was last pointed at, and the one the game DECLINED to
+    // enhance. A refusal is the only authority that separates "this weapon's books are done" from
+    // "this note belongs to a previous relic", so it is earned by trying, not guessed up front.
+    //
+    // In-memory ON PURPOSE, unlike the books-driven marker. A wrong "refused" would send a finished
+    // weapon back to G'Jusana for nine more books, so it must not outlive the session that observed
+    // it; the cost of re-deriving it after a reload is one wasted trip to Jalzahn.
+    private uint _animusUpgradeTriedWeaponId;
+    private uint _animusUpgradeRefusedWeaponId;
+    private int _animusUpgradeFailures;
+
+    // Failures of the enhancement flow before we accept "declined" as the explanation. One is not
+    // enough: Jalzahn's turn-in submenu is a SEAM (see AnimusUpgradeExecutor), so a single menu
+    // hiccup must not be read as proof the books belong to someone else and buy a book over it.
+    private const int AnimusUpgradeFailuresBeforeBookRun = 2;
 
     // Calibration aid (/relic bravesseq): the last (material-quest id, sequence) written to the debug
     // log, so each Braves material-quest sequence change is logged exactly once. In-memory only.
@@ -99,6 +132,18 @@ public sealed class RelicController
     private const int FirstPassFateCheckSeconds = 15;
 
     private readonly Steps.Combat.DeathRecovery _death = new();
+
+    // Global aggro backstop: fights back when something is engaged with us and the running step is
+    // not engaging it. Ticked for every step (see Tick), which is the whole point -- the loops that
+    // never defended themselves are the ones that never called DefendSelf.
+    private readonly Steps.Combat.AggroWatchdog _aggro = new();
+
+    // TickCount64 of the previous Tick, so a defended tick can be given back to the step's deadline.
+    private long _lastTick;
+
+    // Non-empty while the aggro watchdog has intervened (or has spotted a fight that is going
+    // nowhere); surfaced in the main window so it is never a silent takeover.
+    public string AggroWatchdogStatus => _aggro.Status;
 
     // Atma-stage delegation to CBT's Fate Tool Kit (Configuration.AtmaBackend). Ticked every
     // running frame; while it owns the Atma stage the normal objective engine is parked.
@@ -149,6 +194,42 @@ public sealed class RelicController
         _proceduralDone = new HashSet<string>(ctx.Config.CompletedProceduralObjectives);
     }
 
+    // "/relic booksdone": record that the EQUIPPED Atma weapon's nine Trials of the Braves books are
+    // finished, so the run goes to Jalzahn for the Atma -> Animus enhancement instead of reading the
+    // complete note as a previous relic's leftover and buying book 1.
+    //
+    // This exists because the ambiguity is real and not ours to solve: the game keeps the last bought
+    // note active forever, so on a repeat relic "note 9, complete" genuinely does not say which relic
+    // finished it. Relicable records the answer as it drives the books, but a player who did them by
+    // hand -- or who reloaded the plugin before the record was written -- has no such record, and the
+    // wrong guess costs 500 poetics and a nine-book regrind. Returns the message to show.
+    public string MarkAnimusBooksDone()
+    {
+        var equipped = GameState.EquippedRelicItemId();
+        if (equipped == 0)
+            return "no relic weapon is equipped. Equip the Atma weapon whose books you finished, then run this again.";
+
+        var stage = GameState.EquippedRelicStage();
+        if ((int)stage >= (int)RelicStage.Animus)
+            return $"the equipped weapon is already {stage}, so its Animus enhancement is done -- nothing to record.";
+        if (stage != RelicStage.Atma)
+            return $"the equipped weapon is {stage}, not an Atma weapon. The Trials of the Braves are done ON an " +
+                   "Atma weapon, so equip that one first.";
+
+        AnimusWrapWeaponId = equipped;
+        // Also overrides a "Jalzahn declined this weapon" conclusion from earlier in the session:
+        // the user is telling us directly, and they outrank an inference drawn from a failed menu.
+        _animusUpgradeRefusedWeaponId = 0;
+        _animusUpgradeFailures = 0;
+        var note = GameState.ActiveRelicNoteId();
+        var incomplete = GameState.IncompleteActiveBookSlots();
+        if (incomplete.Count > 0)
+            return $"recorded, but note {note} still shows incomplete slot(s): {string.Join(", ", incomplete)}. " +
+                   "Jalzahn will not offer the enhancement until the book is actually finished.";
+        return $"recorded: the books for this Atma weapon are finished (note {note}). /relic start will now go to " +
+               "Jalzahn (Fallgourd Float, North Shroud) for the Atma -> Animus enhancement.";
+    }
+
     // Replace the objective set (used by /relic reload). Re-plans if mid-run.
     public void ReloadObjectives(IReadOnlyList<RelicObjective> objectives)
     {
@@ -195,6 +276,13 @@ public sealed class RelicController
         _pathDone.Clear();
         _lastPathSeq = -1;
         _fateCheckedTick.Clear();
+        _aggro.Reset();
+        // A fresh Start re-earns the "Jalzahn declined this weapon" conclusion rather than inheriting
+        // it: the user may have fixed whatever actually blocked the enhancement (a full inventory, a
+        // half-open menu), and re-trying costs a trip while being wrong costs nine books.
+        _animusUpgradeTriedWeaponId = 0;
+        _animusUpgradeRefusedWeaponId = 0;
+        _animusUpgradeFailures = 0;
         DebugLog.Info("Start: entering SelectStage");
         return true;
     }
@@ -212,6 +300,7 @@ public sealed class RelicController
         _ctx.AutoDuty.Stop();
         // A deliberate Stop must also halt a delegated CBT Atma grind (idempotent otherwise).
         _atmaCbt.EnsureStopped(_ctx);
+        _aggro.Reset();
         _cbtConflict = false;
         _state = State.Stopped;
         DebugLog.Info("Stop: halted, companions released");
@@ -220,6 +309,12 @@ public sealed class RelicController
     // Called every framework tick by the plugin.
     public void Tick()
     {
+        // Real time since the previous tick, stamped before anything can return early, so the aggro
+        // watchdog can hand a step back exactly the time it spent fighting.
+        var tickNow = Environment.TickCount64;
+        var tickDelta = _lastTick == 0 ? 0 : tickNow - _lastTick;
+        _lastTick = tickNow;
+
         // Calibration heartbeat (debug only): record Braves material-quest sequence changes so the
         // per-drop RequestedAtSequences can be read off. Independent of the run state.
         if (DebugLog.On)
@@ -282,6 +377,35 @@ public sealed class RelicController
             return;
         }
 
+        // Global aggro backstop. Runs for EVERY step, ahead of the step itself, because the loops
+        // that never fight back are precisely the ones that never thought to ask -- the teleport
+        // executor's in-combat wait stands still for twenty seconds BECAUSE something is hitting it,
+        // and the flag walk reads no combat state at all. Owning the tick when it fires gives it the
+        // same contract CombatAssist.DefendSelf has inside an executor: the step does not run while
+        // we are defending. It only fires on an aggro nothing else has engaged, so every path that
+        // already handles its own combat keeps it silent. See Steps/Combat/AggroWatchdog.cs.
+        if (_state == State.RunStep && _objective != null && _stepIndex < _objective.Steps.Count)
+        {
+            var running = _objective.Steps[_stepIndex];
+            if (_aggro.Tick(_ctx, running.Type == StepType.ParticipateFate))
+            {
+                // Credit the fight back to the step's deadline, so a long defense cannot fail the
+                // step for the wrong reason.
+                //
+                // KNOWN LIMIT: this is the only clock the controller owns. Executors keep their own
+                // wall-clock deadlines, and those keep running while their Update is not called --
+                // their own DefendSelf branches freeze them, but those branches cannot run on a tick
+                // they do not get. That is why the loops with real stall clocks (the FATE approach,
+                // the leve travel, the flag walk, the treasure-map phases) each call DefendSelf
+                // THEMSELVES: doing so pre-empts this watchdog entirely, since the attacker becomes
+                // the hard target and an attended aggro never fires it. The watchdog is what catches
+                // the loops that have neither -- shops, turn-ins, waits -- where a burnt deadline
+                // costs a retry rather than a wrong decision.
+                _ctx.StepStartTicks += tickDelta;
+                return;
+            }
+        }
+
         switch (_state)
         {
             case State.SelectStage:
@@ -297,6 +421,18 @@ public sealed class RelicController
 
     private void SelectNextObjective()
     {
+        // Retire the books-driven witness the moment the weapon it was about reaches Animus: the
+        // enhancement it was guarding has happened. Without this it would outlive its weapon, and
+        // since a repeat relic on the SAME job carries the SAME Atma item id, the next relic's fresh
+        // Atma would inherit "its books are done" and be marched to Jalzahn with nine books still to
+        // do. Checked here rather than at the upgrade site so a manual enhancement clears it too.
+        if (AnimusWrapWeaponId != 0 && (int)GameState.EquippedRelicStage() >= (int)RelicStage.Animus)
+        {
+            DebugLog.Info("The Atma -> Animus enhancement is done; clearing the books-driven marker " +
+                          "so the next relic on this job grinds its own books.");
+            AnimusWrapWeaponId = 0;
+        }
+
         // Manual duty override: if the player hand-queued a relic duty and is standing inside
         // it, run THAT objective now, regardless of the normal stage/sequence order. This lets
         // a book dungeon (or a relic trial) be entered manually and cleared on the spot instead
@@ -587,7 +723,7 @@ public sealed class RelicController
                     // Mark that THIS Atma weapon is actively running its books, so when the run later
                     // reaches a complete last-book note, the no-next-book branch recognizes the books
                     // were just driven (stop for the manual Animus enhancement) rather than wrapping.
-                    _animusWrapWeaponId = GameState.EquippedRelicItemId();
+                    AnimusWrapWeaponId = GameState.EquippedRelicItemId();
                 }
                 else if ((int)completedStage >= (int)RelicStage.Animus)
                 {
@@ -629,56 +765,68 @@ public sealed class RelicController
                         pool = new List<RelicObjective> { BuildBuyBookObjective(activeNote, nextBook) };
                         // This weapon is advancing through its books (see the fill case) -- so a later
                         // complete last-book note is "books done", not a fresh stale note to wrap.
-                        _animusWrapWeaponId = GameState.EquippedRelicItemId();
+                        AnimusWrapWeaponId = GameState.EquippedRelicItemId();
                     }
                     else
                     {
                         // No next book row: activeNote is the LAST book (9), complete. Two realities share
                         // this state: (a) a REPEAT relic's fresh Atma weapon inherited the PREVIOUS relic's
                         // stale note (the note never clears on its own) and must buy book 1 to start ITS
-                        // own run; (b) this weapon just finished its own 9 books and the final Animus
-                        // enhancement (a manual step) remains. They are indistinguishable from a single
-                        // read, so buy book 1 ONCE PER WEAPON (the common repeat-relic case) and rely on
-                        // the per-weapon guard to stop when the run comes back to a complete note 9 on the
-                        // SAME weapon -- that is case (b), the books were just driven, so guide to the
-                        // manual enhancement rather than re-grinding forever.
+                        // own run; (b) this weapon just finished its own 9 books and the Atma -> Animus
+                        // enhancement remains.
                         //
-                        // The guard is NOT set here: it is armed by the first PRODUCTIVE book step (the
-                        // fill / next-book / first-book cases) once the purchase actually registers and the
-                        // note moves off the stale book. Setting it at the decision point would make a
-                        // single transient G'Jusana buy failure (a menu SEAM) trip alreadyWrapped on the
-                        // retry and stop early with the wrong message; leaving it unset lets the book-1 buy
-                        // use the normal 3-strike failure backoff, while the loop guard still holds (the
-                        // grind arms the guard before the run can return to a complete note 9).
+                        // ORDER BY THE COST OF BEING WRONG, because nothing in game memory separates them:
+                        //
+                        //   guess (b), wrong -> Jalzahn does not offer the enhancement, the flow fails,
+                        //                       we learn it from the game and buy book 1. Cost: a teleport.
+                        //   guess (a), wrong -> 500 poetics and all nine books again. Cost: hours.
+                        //
+                        // So (b) goes first, always, and the expensive one is only taken once the game
+                        // ITSELF has told us the books are not done (_animusUpgradeRefusedWeaponId, set
+                        // when the enhancement flow gives up on this weapon -- see RunStep).
+                        //
+                        // It used to be the other way round, keyed off the Animus stage quest ("you have
+                        // finished Animus before, so this note is a leftover"). That is not a
+                        // discriminator at all: per AnimusUpgradeExecutor, quest 66972 completes EARLY in
+                        // the stage rather than at the enhancement, so it reads true for anyone past
+                        // their first book -- first relic included. It sent freshly-finished book runs
+                        // back to G'Jusana to start over.
                         var equippedId = GameState.EquippedRelicItemId();
-                        var animusQuestComplete = Data.ZodiacQuestRegistry.MainFor(RelicStage.Animus) is { } aq
-                            && GameState.IsQuestComplete(aq.QuestId);
                         var (firstBook, _) = Data.AnimusBookData.NextBook(0);
-                        var alreadyWrapped = equippedId != 0 && equippedId == _animusWrapWeaponId;
+                        var refused = equippedId != 0 && equippedId == _animusUpgradeRefusedWeaponId;
 
-                        if (animusQuestComplete && !alreadyWrapped && equippedId != 0
-                            && firstBook != 0 && Data.AnimusBookData.GJusanaNpcId != 0)
+                        if (refused && firstBook != 0 && Data.AnimusBookData.GJusanaNpcId != 0)
                         {
-                            DebugLog.Info($"Atma weapon {equippedId} carries a stale complete note {activeNote}; " +
-                                          "starting this weapon's Trials of the Braves run (buy book 1) from G'Jusana.");
+                            // Warn, not Info: this spends 500 poetics and restarts a nine-book grind, so
+                            // it must be visible without the debug toggle -- but by now it is a
+                            // CONCLUSION rather than a guess, because the enhancement was tried and the
+                            // game declined it.
+                            DebugLog.Warn($"Jalzahn would not enhance Atma weapon {equippedId}, so the complete note " +
+                                          $"{activeNote} it carries belongs to a PREVIOUS relic. Starting this weapon's " +
+                                          "own Trials of the Braves run (buy book 1) from G'Jusana.");
                             pool = new List<RelicObjective> { BuildBuyBookObjective(activeNote, firstBook) };
                         }
-                        else if (alreadyWrapped)
+                        else
                         {
-                            // This weapon drove its own 9 Trials of the Braves books back to a complete note 9,
-                            // so the only remaining Animus work is the Atma -> Animus enhancement at Jalzahn
-                            // ("Relic Weapon Atma Enhancement"). Auto-run it: AnimusUpgradeExecutor unequips the
+                            // The last book is complete on an Atma weapon and the game has not told us
+                            // otherwise, so the remaining Animus work is the Atma -> Animus enhancement at
+                            // Jalzahn ("Relic Weapon Atma Enhancement"). AnimusUpgradeExecutor unequips the
                             // Atma weapon (it must be unequipped to list in the turn-in menu; the same job is
-                            // kept), drives the menu, and re-equips the resulting Animus weapon -- instead of
-                            // stopping for a manual step. Selected explicitly (not via the normal pool) because
-                            // the stale complete note leaves the book-1..8 objectives reading incomplete against
-                            // it, which would otherwise capture selection.
+                            // kept), drives the menu, and re-equips the resulting Animus weapon. Selected
+                            // explicitly (not via the normal pool) because a stale complete note leaves the
+                            // book-1..8 objectives reading incomplete against it, which would otherwise
+                            // capture selection.
                             var upgrade = _objectives.FirstOrDefault(o =>
                                 o.Completion.Kind == CompletionKind.AnimusUpgraded && !IsObjectiveComplete(o));
                             if (upgrade != null)
                             {
-                                DebugLog.Info($"Relic Note {activeNote} (all 9 books) complete on Atma weapon {equippedId}; " +
-                                              "running the Atma -> Animus enhancement at Jalzahn.");
+                                _animusUpgradeTriedWeaponId = equippedId;
+                                DebugLog.Info($"Relic Note {activeNote} (the last book) is complete on Atma weapon " +
+                                              $"{equippedId}; running the Atma -> Animus enhancement at Jalzahn. " +
+                                              (AnimusWrapWeaponId == equippedId && equippedId != 0
+                                                  ? "These are this weapon's own books."
+                                                  : "There is no record of this weapon driving these books, so if Jalzahn " +
+                                                    "declines they belong to a previous relic and book 1 is bought instead."));
                                 pool = new List<RelicObjective> { upgrade };
                             }
                             else
@@ -689,15 +837,6 @@ public sealed class RelicController
                                 Stop();
                                 return;
                             }
-                        }
-                        else
-                        {
-                            DebugLog.Warn($"Relic Note {activeNote} (the last book) is complete but the weapon is still " +
-                                          $"{completedStage}. If you finished this weapon's 9 books, do the final Animus " +
-                                          "enhancement at Jalzahn; if this is a new relic, buy book 1 from G'Jusana in Mor " +
-                                          "Dhona. Then /relic start.");
-                            Stop();
-                            return;
                         }
                     }
                 }
@@ -717,7 +856,7 @@ public sealed class RelicController
                     pool = new List<RelicObjective> { BuildBuyBookObjective(0, firstBook) };
                     // This weapon is starting its book run -> a later complete last-book note is "books
                     // done" (manual Animus enhancement), not a fresh stale note to wrap.
-                    _animusWrapWeaponId = GameState.EquippedRelicItemId();
+                    AnimusWrapWeaponId = GameState.EquippedRelicItemId();
                 }
                 else
                 {
@@ -1195,6 +1334,12 @@ public sealed class RelicController
             // Read the live FATE: only redirect if it is actually up with enough time left.
             if (Steps.Fates.ById((ushort)fateId) is not { State: FateState.Running } fate)
                 continue;
+            // A FATE at 100% is OVER -- it just has not flipped out of Running yet. There is no credit
+            // left to earn there, so diverting to it is always wasted, and because this arm bypasses the
+            // _fateCheckedTick round-robin it would re-pick the very FATE the executor just rotated off
+            // (the observed pair of back-to-back "already finished on arrival" rotations).
+            if (fate.Progress >= 100)
+                continue;
             if (fate.StartTimeEpoch + fate.Duration - now <= FateMinRemainingSeconds)
                 continue;
             return o;
@@ -1474,6 +1619,28 @@ public sealed class RelicController
 
             case ExecutorStatus.Failed:
                 _activeExecutor.Stop(_ctx);
+
+                // A failed Atma -> Animus enhancement is EVIDENCE, not just a failure. We send the run
+                // to Jalzahn first precisely because he is the only one who can say whether the
+                // complete note on this weapon is its own or a previous relic's leftover -- so when he
+                // will not do it, that is the answer, and the next selection buys book 1 instead of
+                // re-trying forever and stopping on the 3-strike backoff with nothing learned.
+                // Tolerated twice first, because his turn-in submenu is a SEAM and one menu hiccup
+                // must not cost 500 poetics and nine books.
+                if (_objective.Completion.Kind == CompletionKind.AnimusUpgraded
+                    && _animusUpgradeTriedWeaponId != 0)
+                {
+                    _animusUpgradeFailures++;
+                    if (_animusUpgradeFailures >= AnimusUpgradeFailuresBeforeBookRun)
+                    {
+                        _animusUpgradeRefusedWeaponId = _animusUpgradeTriedWeaponId;
+                        DebugLog.Warn($"The Atma -> Animus enhancement failed {_animusUpgradeFailures} times for weapon " +
+                                      $"{_animusUpgradeTriedWeaponId}; taking that as Jalzahn declining it, so the " +
+                                      "complete Relic Note belongs to a previous relic. Buying book 1 to start this " +
+                                      "weapon's own Trials of the Braves run. If that is wrong -- the books really are " +
+                                      "done and something else broke -- stop the run and check the menu lines logged above.");
+                    }
+                }
 
                 // Count consecutive failures of the same objective; stop after a few
                 // instead of re-selecting it forever (the Novus "stall").

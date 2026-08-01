@@ -19,16 +19,36 @@ public sealed class MoveToFlagExecutor : ITaskExecutor
 
     private Vector3? _dest;
     private long _idleSinceTicks;
+    // CombatAssist.DefendSelf's per-caller latch: the id we last armed the backend for, so the mode
+    // is re-sent only when the attacker changes rather than every tick.
+    private ulong _defendArmedId;
 
     public void Start(StepData step, ExecutionContext ctx)
     {
         _idleSinceTicks = 0;
+        _defendArmedId = 0;
         _dest = ctx.Navmesh.FlagToPoint();
         Issue(step, ctx);
     }
 
     public ExecutorStatus Update(StepData step, ExecutionContext ctx)
     {
+        // This is the longest open-world leg in the run -- aetheryte to flag, routinely hundreds of
+        // yalms through populated zones -- and it used to read no combat state at all. Two things
+        // went wrong when something aggroed on the way: nothing ever fought back, and Mount.
+        // EnsureMounted refuses to mount in combat, so the rest of the route was walked ON FOOT
+        // with the mob in tow.
+        //
+        // DefendSelf issues its own Navmesh.Stop(); the per-tick Issue() below re-paths from
+        // wherever the fight ended, so nothing else has to be undone. Clearing the idle clock is
+        // load-bearing: it is wall-clock, so a fight longer than IdleShortGraceMs would otherwise
+        // fail the step the moment we hand back, for a stall that never happened.
+        if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+        {
+            _idleSinceTicks = 0;
+            return ExecutorStatus.InProgress;
+        }
+
         if (!ctx.Navmesh.IsReady())
         {
             _idleSinceTicks = 0;

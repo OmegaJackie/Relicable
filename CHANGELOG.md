@@ -1,5 +1,372 @@
 # Changelog
 
+## 1.5.5.8 — Ask Jalzahn before spending 500 poetics
+
+### Fixed
+
+- **Finishing all nine books still sent the run back to G'Jusana to start over.** 1.5.5.7 fixed half
+  of this. The other half was the rule underneath it: when Relicable had no record of driving the
+  books itself, it decided between "this weapon's books are done" and "this is a previous relic's
+  leftover note" by asking whether you had finished the Animus stage before — reading the "Trials of
+  the Braves" quest.
+
+  That quest is not evidence of anything here. It completes *early* in the Animus stage, not at the
+  enhancement, so it reads as finished for anyone past their first book — first relic included. The
+  rule therefore said "leftover note" to essentially everyone who reached book nine without an
+  intact record, and bought book 1.
+
+  The decision is now ordered by what being wrong costs. Guessing "the books are done" and being
+  wrong costs one teleport: Jalzahn declines, and Relicable learns from that and buys book 1.
+  Guessing "leftover note" and being wrong costs 500 poetics and all nine books again. So the run
+  goes to Jalzahn first, every time, and only starts a fresh book run once the game itself has
+  refused the enhancement — twice, since his turn-in menu is fiddly and one hiccup should not cost
+  you a grind.
+
+  A run that *does* have an intact record is unaffected: it went to Jalzahn before and still does.
+
+## 1.5.5.7 — Finishing the books sends you to Jalzahn, not back to G'Jusana
+
+### Fixed
+
+- **Finishing your ninth book and reloading meant starting all nine again.** A finished Relic Note
+  stays active forever, so "note 9, complete, on an Atma weapon" describes two different situations
+  that look identical: a new relic carrying the *previous* one's leftover note, or a weapon that
+  just finished its own books. Nothing in the game separates them, so Relicable remembered which it
+  had driven — in memory only. Reload the plugin or restart the game between the last book and
+  pressing Start, and that memory was gone: the run read a freshly-finished book as a leftover and
+  bought book 1, for 500 poetics and a nine-book regrind.
+
+  It is now remembered on disk, written the moment it is learned, and cleared once the weapon
+  actually reaches Animus — so the next relic on the same job still grinds its own books rather
+  than inheriting this one's answer.
+
+- **On a first relic there was never any ambiguity to begin with.** A leftover note requires a
+  previous relic to have left it there, which requires having finished the Animus stage before —
+  and the game records that. So the first time through, a complete last book on an Atma weapon can
+  only be that weapon's own nine books, whether Relicable drove them or you did by hand. It now
+  goes straight to the enhancement instead of stopping to ask.
+
+- **The decision says so out loud.** When Relicable does judge a complete note to be a previous
+  relic's leftover, it now says that in the log at warning level — visible without turning on the
+  debug log — along with what to do if the judgement is wrong. It spends 500 poetics and restarts a
+  nine-book grind, which is not something that should happen quietly.
+
+### Added
+
+- **`/relic booksdone`** — tells Relicable that the equipped Atma weapon's nine books are finished,
+  for when it has no record of its own: you did the books by hand, or the record was lost with a
+  reload. `/relic start` then goes to Jalzahn for the Atma → Animus enhancement. It refuses if the
+  weapon is not an Atma, and warns if the active book still has incomplete entries.
+
+## 1.5.5.6 — Something aggroes, something fights back
+
+### Added
+
+- **An aggro watchdog that runs for every step, not just the fighting ones.** Each executor that
+  fights already defended itself, but only in the branches that remembered to ask — and the ones
+  that got missed were the travelling and waiting branches, which is exactly where a wandering mob
+  lands on you. That is why "aggroed enemies aren't getting attacked" kept coming back: the fix was
+  always per-branch, and there was always another branch.
+
+  The watchdog watches from outside the executors, so it needs no cooperation from them. When
+  something is engaged with you, nothing is engaged with *it*, and that has held for a few seconds,
+  the run stops, targets the attacker, marks it and fights back — then hands the step straight back
+  when the fight is over, with the step's own deadline credited for the time it spent fighting.
+
+  It is a backstop and behaves like one. It never fires while anything already has the attacker
+  targeted, so every path that already works stays untouched. It waits three times as long while
+  you are still moving, since a mob picked up riding past a camp usually gives up on its own. And it
+  leaves FATEs entirely alone — not just while you are standing in the ring, but for FATE mobs
+  generally, including one that chases you back out of it. A FATE enemy you are not level-synced to
+  is one your combat plugin will refuse to attack, so grabbing it would only produce a staring
+  contest; the FATE step owns getting into the ring and syncing, and keeps that job.
+
+  On by default; the delay is configurable in Settings ▸ Combat assist.
+
+- **"Aggroed" is now read from the enmity table rather than from where a mob happens to be looking.**
+  The old check asked whether an enemy's current target was you. That is a live pointer, not an
+  enmity record: it reads as nothing at all while a mob is still running at you after pulling, and
+  it swings onto a passing NPC or your chocobo for seconds at a time. Every miss meant the run
+  concluded nothing was on it and walked away. The nameplate colour — orange for pulled, red for
+  engaged — holds for the whole fight regardless, and that is what is checked now.
+
+- **A warning when a fight is going nowhere.** Standing still, in combat, holding the thing that is
+  hitting you, and its health has not moved for fifteen seconds: that is a line of sight, level
+  sync or combat-plugin problem, and it now says so in the main window instead of looking like
+  progress. Deliberately a report and not an intervention — re-sending a rotation command would
+  hide the cause rather than fix it.
+
+### Fixed
+
+- **The teleport step stood still for twenty seconds *because* something was hitting it.** Teleport
+  is refused in combat, so the step waited for combat to drop — but the mob beating on it was the
+  reason combat would not drop, and nothing ever fought back. It now fights first and waits only
+  when nothing is actually attacking; neither path spends an attempt.
+
+- **The walk to a map flag now defends itself.** The longest single leg in the run — aetheryte to
+  flag, routinely hundreds of yalms through populated zones — read no combat state at all. Worse,
+  mounting is refused in combat, so once something aggroed the rest of the route was walked on foot
+  with the mob in tow. Its idle-detection clock is frozen while fighting, so a long fight can no
+  longer fail the step for a stall that never happened.
+
+- **The leve run fights on the way in.** Every other phase of a leve — the fight, the lure, the
+  markers, the protection hold, the escort — already stopped for an ambient hostile. Travel, the
+  phase that covers the most ground, was the one that did not, so a mob picked up en route was
+  carried all the way to the leve anchor.
+
+- **The flight out to a FATE fights back too.** The approach to a FATE ring is a full cross-zone
+  haul with the rotation off, and the only enemies it could see were ones already carrying that
+  FATE's id — so an ordinary hostile that aggroed on the way was invisible to it at any distance.
+  Its stall clock is frozen while fighting, so a long fight can no longer be mistaken for an
+  unreachable ring and rotate you off a FATE that was fine.
+
+## 1.5.5.5 — Teleport waits until it can actually cast
+
+### Fixed
+
+- **"Teleport issued" was never proof a teleport was happening.** `Telepo.Teleport` returning true
+  only means the request was queued — everything upstream of it was invisible. Seen live: the
+  request accepted, then fifteen seconds with no cast, no pending request and no zoning, while a
+  manual Return (a different action, with no gil cost) worked from the same spot.
+
+  The step now asks the action layer whether Teleport can be used *before* spending an attempt on
+  it, and waits for the refusal to clear rather than firing blind into it. That is the prevention:
+  the cast goes out the moment it can succeed, instead of on a retry clock. If the refusal never
+  clears, the step reports the game's own status code instead of a generic failure.
+
+- **A request that produced no cast is retried in three seconds, not fifteen.** The two failures —
+  a cast that started and was interrupted, and a request that never produced one — are now told
+  apart and each has its own clock. Attempts raised from three to five, so the whole sequence is
+  shorter *and* more forgiving than before.
+
+- **Combat is waited out rather than counted as a failure.** Teleport is refused outright in
+  combat, which from Telepo's side looks identical to a request that did not take. Bounded, so a
+  combat flag that never clears cannot hang the step.
+
+- **Failures say what it would have cost and what you are carrying.** "It will not teleport" and
+  "you cannot afford it" looked identical from every other signal.
+
+- The teleport heartbeat now reports the action status and whether a cast was ever seen.
+
+## 1.5.5.4 — The teleport step stands still while it casts
+
+### Fixed
+
+- **Teleports that started casting and then quietly did nothing.** Movement cancels the Teleport
+  cast, and the teleport step never stopped moving. A vnavmesh path outlives the executor that
+  issued it, so a step handing over mid-route — or a "Run next" click that re-plans while the
+  character is still walking — left the run walking straight through its own five-second cast. The
+  cast begins, dies silently, and the step then waits out its full fifteen-second attempt window
+  before trying the same thing again. Three times. The step now halts any path that is still
+  running, on every tick of the cast, so a move issued from anywhere is caught.
+
+- **An interrupted cast is retried in seconds, not after the full attempt window.** A cast that was
+  seen to start and then vanished without zoning was interrupted — a known-bad outcome rather than
+  a slow one — so it re-casts after 2.5 seconds instead of 15.
+
+- **It will no longer burn attempts where the cast cannot start at all.** Teleport cannot begin
+  while airborne, and Telepo still reports the request as issued, so this was invisible: the run
+  now lands first. Mid-conversation and cutscenes are waited out rather than counted as failures.
+  Being mounted on the ground is fine and does not force a dismount.
+
+- **A teleport heartbeat** (every three seconds) reports which wait condition is holding — casting,
+  zoning, request pending, airborne, in an event — plus the destination and current territory, so
+  "it will not teleport" is answerable from the log alone.
+
+## 1.5.5.3 — Leve objective points no longer sit under the floor
+
+### Fixed
+
+- **Travelling to a leve, ending up too low to the ground and jittering.** The objective position
+  comes from the leve sheet, and its height is regularly a few yalms *under* the walkable floor. The
+  character then paths at a point it can never stand on: the arrived check never passes, the move is
+  re-issued forever, and the landing probe — which searches *downward* — snaps to an underground
+  surface. Up to now the only cure was an authored per-leve correction, which fixes exactly the
+  leves someone has already run into and no others.
+
+  The objective point is now resolved onto real walkable ground for every leve. The trick is
+  probing from *above* it: vnavmesh keeps only floors at or below the probe height and returns the
+  highest, so probing at the sheet height finds whatever lies under the ground and misses the real
+  floor over it — which is why the existing downward landing probe could never repair this itself.
+  The correction only ever lifts, and only when the ground genuinely comes back above the sheet
+  point, so leves that work today are untouched.
+
+- **Short hops to a leve were handed a flight path they could not follow.** Leve travel passed the
+  bare "is flying allowed here" gate as the fly flag. On a leg too short to mount for, that gave a
+  still-grounded character a 3D path, which vnavmesh stalls on — more shuffling. It now uses the
+  same rule as every other travel in the plugin: fly only when already airborne, or mounted with a
+  leg long enough to be worth taking off for.
+
+- **A leve approach that cannot make progress now recovers instead of grinding.** Fifteen seconds
+  without getting closer re-resolves the objective position and forces a fresh path, rather than
+  re-issuing the same dead one until the leve's five-minute timeout.
+
+## 1.5.5.2 — Drop level sync rather than die to a FATE
+
+### Added
+
+- **A FATE you are losing now costs you the FATE, not a death.** Level sync is what lets you fight
+  a FATE at all — and it is also what lets a boss FATE kill a relic-geared character, since it
+  squashes your health pool and mitigation down to the FATE's level. Below 10% health (adjustable),
+  Relicable now turns sync off: you snap back to full level, full health and full mitigation
+  against enemies that are suddenly far beneath you.
+
+  That forfeits the FATE's credit, which is the trade — dying costs far more, because recovery
+  Returns you to a home aetheryte and restarts the whole objective from its teleport. The run holds
+  and defends itself while unsynced (safe, at full level, and the quickest way out of combat and
+  into regen), then syncs back in and resumes FATEs once health is back above 60%.
+
+- **It will not bail out of a fight you are about to win.** The threshold alone is not the trigger:
+  the run compares time-to-kill against time-to-die, both measured from health that has actually
+  moved over the last three seconds rather than assumed. If the enemy dies first, it stays synced
+  and finishes the FATE. Rates unknown — nothing landing yet, no target — counts as losing, so a
+  fight it cannot read is one it escapes.
+
+  Toggle and both thresholds live under Configuration → Animus.
+
+## 1.5.5.1 — A blocked shot re-paths instead of shuffling on the spot
+
+### Fixed
+
+- **Jittering on the spot against an enemy on another elevation.** When terrain blocked the line to
+  a target the run had already closed on, it shuffled in place indefinitely and never attacked.
+  Two causes:
+
+  The raycast was acted on frame by frame. On a marginal line — a mob pacing behind a rock, a
+  slope, your own drift — it flips constantly, so the run alternated between "close in to clear the
+  block" and stopping, once per frame. vnavmesh's stop is not edge-triggered: each call also throws
+  away the cached destination, so every one of those flips re-pathed from scratch. That is the
+  jitter. The reading is now debounced in both directions before it is acted on, and standing to
+  fight stops once rather than every frame.
+
+  And nothing ever timed out. The existing unreachable-mob guard only watches the *approach*, so a
+  mob you are standing under a ledge from is "in range" and no guard was ever looking at it.
+
+### Added
+
+- **A blocked shot now escalates on a clock.** Three seconds without a line and the run forces a
+  real re-path — and re-aims it. It samples the navmesh in a ring around the target and heads for
+  the nearest spot that actually *has* a clear line, which on an elevation break is a spot on the
+  target's own tier, so the path routes around and up to it. Re-aiming at the target's centre (what
+  closing in does) is useless there — that is the direction you are already pressed into the cliff
+  from. Retried every four seconds.
+
+  If fifteen seconds of that still yields no shot, the mob is blacklisted for twenty seconds and
+  another is taken — the same non-failing escape the approach guard already had, so a target that
+  simply cannot be reached costs the run a few seconds instead of the rest of the session.
+
+## 1.5.5.0 — Escort leves walk instead of shuffling
+
+### Fixed
+
+- **Escort leves ("Pets Are Family Too" and friends) moved in tiny stop-start steps.** Two separate
+  stalls, both of them `Stop()` being called every frame:
+
+  The escort NPC follows at roughly your own pace, so the gap to it sits *on* the single 8-yalm
+  "has it fallen behind?" threshold and crosses it constantly. Every frame on the far side issued a
+  full stop, and every frame on the near side started a fresh path — step, halt, step, halt. That
+  check now has two bands: it pauses once the NPC is genuinely 12 yalms back, and only sets off
+  again once it has closed to 8. It also stops *once* on entering that wait rather than every
+  frame, which matters because vnavmesh's stop is not edge-triggered — each call also throws away
+  the cached destination, so the next move re-paths from scratch.
+
+  Separately, arriving at a waypoint stopped dead, gave up the frame, and re-pathed to the next
+  one — a twelve-point route meant twelve of those. Waypoints are now consumed without stopping,
+  and every point already behind you is consumed at once instead of one per frame.
+
+- **It now covers ground in long legs.** Rather than walking to the very next waypoint, it heads
+  for the furthest one within 40 yalms and beckons at the start of each leg. The radius is bounded
+  on purpose — vnavmesh paths around the terrain itself, but the authored waypoints are what keep
+  the walk inside the corridor the route was captured along, so it follows them rather than making
+  a run at the finish. If the NPC will not close the gap at all, the run walks on and keeps
+  beckoning after eight seconds instead of holding until the leve times out.
+
+## 1.5.4.9 — Death recovery says why it is stuck
+
+### Added
+
+- **A Return the game refuses is no longer silent.** Recovery now asks whether Return can actually
+  be used before firing it, and logs the game's own refusal code when it cannot. A declined
+  Return — still on its cooldown, or content it does not work in — used to be indistinguishable
+  from one that worked: the character simply stayed a corpse while the 4-second retry loop read as
+  the plugin doing nothing at all. The refusal does not consume the retry window either, so
+  recovery fires the moment the block clears rather than waiting it out.
+
+- **The "Return to your home point?" confirmation is answered by Relicable itself**, so recovery no
+  longer depends on TextAdvance or YesAlready being installed and switched on — without one, the
+  prompt just sat there, the character stayed dead, and the retry raised it again. Scoped to the
+  few seconds after its own Return while confirmed dead, so it is never a blanket yes.
+
+## 1.5.4.8 — Death recovery no longer mistakes the teleport for the resurrection
+
+### Fixed
+
+- **"You can never resurrect — it keeps dying and respawning dead by the aetheryte."** Death
+  recovery decided you were alive again the instant a zone transition started. Pressing Return
+  *is* a zone transition, so the check cleared itself 97 milliseconds after issuing Return, while
+  the character was still a corpse and the zone had not even changed yet. The run resumed, found
+  itself still dead on arrival, latched death again and re-fired Return on its 4-second
+  throttle — round and round.
+
+  A zone change now says nothing either way about being dead; the recovery holds its state until
+  the transition finishes. Death is read from the game's own unconscious flag rather than
+  inferred from HP alone, and neither death nor the revive is acted on until it has actually
+  held for a moment, so a single frame of HP 0 as a zone finishes loading can no longer spend a
+  Return on a living character. If the recovery is still stuck after 45 seconds it now says so in
+  the log — Return on cooldown, or a death window waiting on an answer — instead of retrying
+  silently forever.
+
+## 1.5.4.7 — Auto-discard mob drops
+
+### Added
+
+- **Auto-discard (Configuration → Inventory, off by default).** A long unattended run fills the
+  bags with mob drops and then quietly stops looting. With this on, the clutter goes as it
+  accumulates — **immediately, permanently, and with no confirmation window to answer**. Items are
+  dropped through the game's own `InventoryManager` discard call, which is the path the confirm
+  dialog sits *in front of*, so no prompt is ever raised; if some item class does put one up it is
+  answered automatically, and only ever a prompt naming the exact item just discarded.
+
+  Two modes. *All low-value materials* is the hands-off one: ordinary white, stackable,
+  non-usable, tradeable crafting materials worth at most a vendor price you set (100 gil by
+  default). *Only my discard list* deletes nothing you have not named.
+
+  Because it cannot be undone, the rules are deliberately narrow and the consequence is shown
+  before you commit. Only the four player bags are ever scanned — the armoury, key items, crystals
+  and currency are not reachable. Never discarded, in either mode: gear and weapons, anything
+  usable (treasure maps, minions, food, aetheryte tickets), HQ, collectables, melded items,
+  materia, anything the game itself marks undiscardable, anything untradeable or unique — which
+  covers every relic material — and every item id the loaded relic objectives reference, so a new
+  stage's material is protected the moment its objective exists. By default it only runs while
+  automation is running, so nothing disappears during normal play.
+
+  The settings page lists your bags with the verdict the live rules give each stack, plus per-item
+  **Keep** / **Discard** buttons, so you can see exactly what enabling it would delete and correct
+  anything you disagree with.
+
+## 1.5.4.6 — A book FATE you just cleared is no longer written off as someone else's
+
+### Fixed
+
+- **"FATE was already finished on arrival ... never participated so no credit" on a FATE you had
+  just fought all the way to 100%.** A FATE's reward — and with it the book slot it credits — is
+  granted when the FATE *ends*, which is a beat after its progress reads 100. Relicable finished the
+  step on progress alone, so it handed the objective back during that gap; the controller re-checks
+  the book straight off the note, still saw the slot empty, and re-selected the same FATE. The
+  restarted step had no memory of the fight, read a finished FATE it had not been inside for, and
+  rotated off it announcing that it had never taken part.
+
+  Nothing was actually lost — the credit landed a moment later and the run moved on — but the
+  decision was made on a false reading. A finished FATE is now held until the slot actually credits
+  (bounded, and resumed rather than restarted if the objective is handed back), and "we fought this
+  one" survives the step restart, so the rotation only ever fires for a FATE that really was cleared
+  by someone else.
+
+- **The co-located-FATE shortcut could dive straight back onto a FATE that was already over.** It
+  accepted any FATE still flagged Running, including one sitting at 100% waiting to flip, and it
+  bypasses the round-robin that stops a rotated-off FATE being re-picked — so it handed back the very
+  FATE the executor had just left, twice in a row. Finished FATEs are no longer eligible.
+
 ## 1.5.4.5 — Melee actually closes to melee, and the relic can finally come off
 
 ### Fixed

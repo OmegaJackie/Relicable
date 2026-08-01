@@ -121,6 +121,13 @@ public sealed class MainWindow : Window
         if (!string.IsNullOrEmpty(atmaZone))
             ImGui.TextWrapped(atmaZone);
 
+        // Aggro backstop: it takes the tick away from the running step to fight something that
+        // aggroed, so say so rather than leaving the run looking stalled. Also carries its "this
+        // fight is going nowhere" warning, which is a backend/line-of-sight problem to look at.
+        var aggroStatus = _controller.AggroWatchdogStatus;
+        if (!string.IsNullOrEmpty(aggroStatus))
+            Ui.Wrapped(Red, aggroStatus);
+
         // Co-run conflict: CBT's Fate Tool Kit is grinding FATEs at the same time as Relicable, so
         // Relicable has stepped aside to stop them fighting over movement. Tell the user how to
         // reclaim control or coordinate the two.

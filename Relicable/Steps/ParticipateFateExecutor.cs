@@ -70,10 +70,35 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
     private ushort _stuckFateId;
     private long _stuckFateUntil;
 
+    // How long we hold a finished book FATE before handing the step back, waiting for the game to
+    // actually pay it out. A FATE's reward -- and with it the relic note's FATE bit -- is granted
+    // when the FATE ENDS, not the instant its progress reads 100, so completing on progress alone
+    // hands the step back while the objective still reads incomplete. See AwaitingFateCredit.
+    private const long FateCreditSettleMs = 8000;
+
     private bool _wasInside;
     // Any ring stood in this step (target OR prerequisite). Separate from _wasInside, which is
     // target-only because it drives completion; see the stall escapes in Update.
     private bool _participated;
+    // ---- State that DELIBERATELY survives Start ----
+    // The executor is a singleton and the controller re-Starts it every time it re-selects this
+    // objective, which it does the moment the step completes -- so anything cleared in Start cannot
+    // answer "did WE do this FATE?" across that restart. Both fields are keyed by FATE id, so they
+    // can never be read against a different FATE.
+    //
+    // _foughtFate/_foughtFateAt: the last FATE ring we physically stood in. Without it, a book FATE
+    // we cleared ourselves and that is re-selected before its note bit flips (the payout race above)
+    // reads as one we merely walked in on, and gets rotated off with a bogus "never participated".
+    private ushort _foughtFate;
+    private long _foughtFateAt;
+    // How long a fought FATE stays "ours" for that judgement. Generous: it only has to outlive the
+    // gap between finishing a FATE and the controller handing the same objective back.
+    private const long FoughtRecentlyMs = 120_000;
+    // _settleFate/_settleSince: the credit wait started for that FATE (see AwaitingFateCredit). Also
+    // survives Start, so a re-selected objective resumes the SAME wait instead of restarting the
+    // clock and holding for another full window on every pass.
+    private ushort _settleFate;
+    private long _settleSince;
     private bool _engaging;
     private long _syncThrottle;
     private long _waitLog;
@@ -93,6 +118,9 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
     // step, so we now stage at / wait for the TARGET instead of the prereq.
     private bool _workingPrereq;
     private bool _prereqDone;
+    // Low-health fallback: drops the level sync (forfeiting this FATE) rather than dying to it,
+    // unless the mob is going to die first. Owns its own state; see FateSyncGuard.
+    private readonly Combat.FateSyncGuard _syncGuard = new();
 
     public void Start(StepData step, ExecutionContext ctx)
     {
@@ -117,6 +145,7 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         _flaggedFor = null;
         _workingPrereq = false;
         _prereqDone = false;
+        _syncGuard.Reset();
         // NPC-initiated ("speak to begin") boss FATEs show a Talk / Yes-No on the start interaction;
         // let TextAdvance carry it. Enabled as a global "keep it on" like the leve accept flow; it only
         // affects dialogue, so it is inert during the FATE fight.
@@ -180,6 +209,16 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
             if (_wasInside)
             {
                 ctx.Rotation.Disable();
+                // ...but only once the book slot has actually credited. Completing the instant the FATE
+                // leaves the table hands the step back into a controller that re-selects on completion,
+                // and if the payout has not landed yet the objective still reads incomplete and is handed
+                // straight back (see AwaitingFateCredit).
+                if (AwaitingFateCredit(step, ctx))
+                {
+                    ctx.Navmesh.Stop();
+                    WaitLog($"FATE {step.FateId} ended; waiting for the book slot to credit before moving on.");
+                    return ExecutorStatus.InProgress;
+                }
                 DebugLog.Verbose("FATE ended; step complete");
                 return ExecutorStatus.Complete;
             }
@@ -322,21 +361,55 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
                 DebugLog.Info($"FATE prereq {fate.FateId} finished; now waiting for the target {step.FateId}");
                 return ExecutorStatus.InProgress;
             }
+            // Did WE do this FATE? _wasInside covers the normal case (we fought it during THIS step).
+            // _foughtFate covers the same FATE across a step RESTART: the payout race below means the
+            // controller routinely hands this objective back while the note bit is still unset, and Start
+            // has cleared _wasInside by then -- so without the surviving latch a FATE we just cleared
+            // ourselves reads as one we never touched.
+            var participated = _wasInside || FoughtRecently(fate.FateId);
+
+            // Progress reads 100 a beat BEFORE the game pays the FATE out: the reward -- and the relic
+            // note's FATE bit with it -- lands when the FATE actually ENDS. Completing here on progress
+            // alone therefore hands the step back while the objective still reads incomplete, the
+            // controller re-selects it, and the fresh executor sees a finished FATE it has no memory of
+            // fighting -- the reported "did the FATE but thought it was already done when it got there",
+            // logged as "never participated" and rotated off. Hold until the slot credits (bounded, and
+            // resumed rather than restarted across a re-select) so the step is handed back only once the
+            // objective can actually read as done.
+            if (participated && AwaitingFateCredit(step, ctx))
+            {
+                WaitLog($"FATE {fate.FateId} finished (progress {fate.Progress}); " +
+                    "waiting for the book slot to credit before moving on.");
+                return ExecutorStatus.InProgress;
+            }
+
             // A specific book FATE (FateId != 0) that was ALREADY finished when we arrived -- we never
-            // entered its ring, so _wasInside is false -- was missed (cleared by other players) and earned
-            // NO book credit. Returning Complete there is a false "success": Complete does not stamp
-            // _fateCheckedTick, so the controller (which orders book FATEs by that stamp) re-picks this SAME
-            // just-finished FATE immediately, and it will not respawn for a long while, so the run churns in
-            // the zone completing a done FATE over and over without ever crediting the slot (the reported
+            // entered its ring -- was missed (cleared by other players) and earned NO book credit.
+            // Returning Complete there is a false "success": Complete does not stamp _fateCheckedTick, so
+            // the controller (which orders book FATEs by that stamp) re-picks this SAME just-finished FATE
+            // immediately, and it will not respawn for a long while, so the run churns in the zone
+            // completing a done FATE over and over without ever crediting the slot (the reported
             // "completes a FATE but the slot does not progress / it does not move on"). Rotate instead: the
             // controller stamps _fateCheckedTick and round-robins to the NEXT incomplete book FATE, coming
-            // back to this one later once it may have respawned. A FATE we actually fought in (_wasInside)
-            // still Completes normally, and the Atma "any active FATE" mode (FateId 0) is unchanged -- there
+            // back to this one later once it may have respawned. A FATE we actually fought in still
+            // Completes normally, and the Atma "any active FATE" mode (FateId 0) is unchanged -- there
             // completing simply re-picks the next nearest active FATE.
-            if (step.FateId != 0 && !_wasInside)
+            if (step.FateId != 0 && !participated)
             {
                 DebugLog.Info($"FATE {fate.FateId} was already finished on arrival (progress {fate.Progress}); " +
                     "never participated so no credit -- rotating to the next incomplete book FATE.");
+                return ExecutorStatus.Rotate;
+            }
+            // We fought it, but on a PREVIOUS pass of this step and the credit still has not landed after
+            // the settle window above -- so it is not coming (the FATE ended without crediting us). Say so
+            // and rotate rather than Completing: Complete does not stamp _fateCheckedTick, so the
+            // controller would re-pick this same dead FATE and spin on it. (If the slot DID credit while
+            // we held, fall through and Complete -- the objective now reads done and drops out of the pool.)
+            if (step.FateId != 0 && !_wasInside && !FateSlotCredited(step, ctx))
+            {
+                DebugLog.Info($"FATE {fate.FateId} finished (progress {fate.Progress}); we cleared it but the " +
+                    $"book slot has not credited within {FateCreditSettleMs / 1000}s -- rotating to the next " +
+                    "incomplete book FATE.");
                 return ExecutorStatus.Rotate;
             }
             DebugLog.Verbose($"FATE {fate.FateId} finished (progress {fate.Progress})");
@@ -359,6 +432,26 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // single-boss FATE like "What Gored Before". The old code only synced AFTER reaching the mob's
         // melee range while grounded, so a boss that roamed to the ring edge (melee just outside the
         // old sync spot), or any slow approach, left us unsynced and unable to attack. See TrySyncToFate.
+        //
+        // ...unless the survival fallback has deliberately dropped the sync. That has to be checked
+        // HERE, before the first sync call: TrySyncToFate runs every in-ring tick, so a bail-out
+        // that did not suppress it would be undone by the very next frame and the character would
+        // sync straight back into the fight it was dying to.
+        var syncBailed = _syncGuard.Tick(ctx, fate.FateId);
+        if (syncBailed)
+        {
+            // Bailed out on purpose. Everything below this line is "work the FATE" -- approaching,
+            // closing on a mob, handing off to the rotation -- and none of it applies while we are
+            // deliberately unsynced: chasing the mob that was killing us is the last thing wanted.
+            // Hold instead, and fight back at full level against whatever is actually on us, which
+            // is both safe (those mobs are now far below us) and the quickest route out of combat
+            // and into the regen that ends the bail-out.
+            ctx.Navmesh.Stop();
+            if (!Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+                ctx.Rotation.Disable();
+            WaitLog($"FATE {fate.FateId}: level sync dropped to survive; holding until health recovers.");
+            return ExecutorStatus.InProgress;
+        }
         TrySyncToFate(fate.FateId);
 
         // Go to an actual FATE ENEMY, not the ring centre. A melee job -- and RSR, which does not move
@@ -386,6 +479,14 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         // (a table despawn while we were inside means the FATE is over). Never latched for the prereq.
         if (inRing && !_workingPrereq)
             _wasInside = true;
+        // The same fact, keyed by FATE id and surviving Start, so a step RESTART on this FATE still
+        // knows we fought it. Refreshed every in-ring tick, and set for a prerequisite ring too --
+        // it is read per FATE id, so the prereq's entry can never be mistaken for the target's.
+        if (inRing)
+        {
+            _foughtFate = fate.FateId;
+            _foughtFateAt = System.Environment.TickCount64;
+        }
         // Any ring we have physically stood in this step, the TARGET's or a PREREQUISITE's. _wasInside
         // is target-only because it drives completion, so it cannot gate the stall escapes below:
         // rotating off a prereq we fought in, or blacklisting the Atma FATE we are standing in,
@@ -476,6 +577,21 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         if (dist > engageBand)
         {
             _engaging = false;
+
+            // Self-defense on the way in, ahead of the stall guard and the Rotation.Disable below.
+            // This leg is a full cross-zone flight with the rotation off, and the only finder in
+            // scope is NearestHostileInFate -- which matches ONLY mobs carrying this FATE's id, so
+            // an ordinary overworld hostile that aggroed en route is invisible to it at any
+            // distance, and we flew on with the mob attached.
+            //
+            // Freezing the approach tracker while defending is the load-bearing half: ApproachStallMs
+            // is wall-clock, so a fight longer than it would otherwise read as "no approach progress"
+            // and blacklist the mob (or rotate off a FATE) for a stall that never happened.
+            if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+            {
+                _approachProgressAt = System.Environment.TickCount64;
+                return ExecutorStatus.InProgress;
+            }
 
             // Stall guard. Without one, an approach that can never finish -- a mob hovering over
             // water or on an off-mesh ledge, a ring centre vnav cannot path to -- sat here forever
@@ -739,6 +855,54 @@ public sealed class ParticipateFateExecutor : ITaskExecutor
         _approachBest = float.MaxValue;
         _approachProgressAt = 0;
     }
+
+    // True when THIS FATE is one we physically stood in recently -- across a step restart, which
+    // clears _wasInside. Keyed by id, so a different FATE never inherits the latch.
+    private bool FoughtRecently(ushort fateId)
+        => fateId != 0 && fateId == _foughtFate
+           && System.Environment.TickCount64 - _foughtFateAt <= FoughtRecentlyMs;
+
+    // True while we should keep holding a finished book FATE instead of handing the step back,
+    // because its slot has not credited yet.
+    //
+    // The FATE reward -- and the relic note's FATE bit with it -- is granted when the FATE ENDS, which
+    // is a beat AFTER its progress reads 100. The controller re-selects the objective the moment the
+    // step completes and reads completion straight off the note, so completing inside that gap hands
+    // back an objective that still reads incomplete and gets handed straight back to a freshly Started
+    // executor. Waiting out the payout keeps the whole race from existing.
+    //
+    // Bounded by FateCreditSettleMs so a FATE that never credits us cannot stall the run, and the clock
+    // is keyed to the FATE (not reset by Start) so a re-selected objective RESUMES the wait rather than
+    // serving a fresh full window on every pass. Only book FATEs have a slot to credit: the Atma "any
+    // active FATE" mode (FateId 0) and any non-FateSlot objective never wait.
+    private bool AwaitingFateCredit(StepData step, ExecutionContext ctx)
+    {
+        if (step.FateId == 0)
+            return false;
+        if (ctx.CurrentObjective?.Completion is not { Kind: CompletionKind.FateSlot })
+            return false;
+        if (FateSlotCredited(step, ctx))
+            return false;
+
+        var now = System.Environment.TickCount64;
+        // Start (or restart) the clock for a different FATE, and for THIS one whenever we have been in
+        // its ring since the last wait began -- i.e. it respawned and we fought it again, which earns a
+        // fresh payout window rather than inheriting an expired one from the previous clear.
+        if (_settleFate != (ushort)step.FateId || _foughtFateAt > _settleSince)
+        {
+            _settleFate = (ushort)step.FateId;
+            _settleSince = now;
+        }
+        return now - _settleSince < FateCreditSettleMs;
+    }
+
+    // True when this step's book FATE slot now reads as done on the relic note -- i.e. the payout has
+    // landed. False for the Atma "any active FATE" mode and for any objective that is not a book FATE
+    // slot, neither of which has a slot to read.
+    private static bool FateSlotCredited(StepData step, ExecutionContext ctx)
+        => step.FateId != 0
+           && ctx.CurrentObjective?.Completion is { Kind: CompletionKind.FateSlot } c
+           && GameState.IsFateComplete(c.Slot);
 
     // Throttled status log (every 10s) so the wait state is visible without spam.
     private void WaitLog(string message)

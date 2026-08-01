@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System.Collections.Generic;
+using System.Numerics;
 using Dalamud.Plugin;
 using Dalamud.Utility;
 using Dalamud.Bindings.ImGui;
@@ -261,6 +262,31 @@ public sealed class ConfigWindow : Window
 
         ImGui.Separator();
         ImGui.TextDisabled("Combat assist");
+        Checkbox("Fight back when something aggroes and nothing engages it", _config.AggroWatchdog,
+            v => _config.AggroWatchdog = v);
+        Ui.Tooltip("A safety net that runs for every step, not just the fighting ones. If an enemy is " +
+            "engaged with you and Relicable is pointed at something else — or at nothing — it stops, " +
+            "targets the attacker and fights back.\n\n" +
+            "This is what covers the steps that otherwise just stand there: waiting for a teleport " +
+            "(which the game refuses while you are in combat), walking to a map flag, or holding at a " +
+            "leve anchor.\n\n" +
+            "It never fires while something already has the attacker targeted, and it stands down " +
+            "inside a FATE, where the FATE step owns targeting and level sync.");
+
+        if (_config.AggroWatchdog)
+        {
+            var aggroSeconds = _config.AggroWatchdogSeconds;
+            if (ImGui.SliderInt("Fight back after (seconds)", ref aggroSeconds, 2, 30))
+            {
+                _config.AggroWatchdogSeconds = aggroSeconds;
+                _dirty = true;
+            }
+            Ui.Tooltip("How long an unengaged attacker is tolerated before Relicable stops to deal with " +
+                "it. Measured from when the enemy engaged you.\n\n" +
+                "Three times this while you are still moving, because a mob picked up riding past a " +
+                "camp usually gives up on its own and is not worth stopping for. Default 5.");
+        }
+
         Checkbox("Auto-summon chocobo", _config.AutoSummonChocobo, v => _config.AutoSummonChocobo = v);
         Checkbox("Set chocobo to healer stance", _config.ChocoboHealerStance, v => _config.ChocoboHealerStance = v);
         Checkbox("Use BossMod Reborn AoE avoidance", _config.UseBossModRebornAvoidance, v => _config.UseBossModRebornAvoidance = v);
@@ -298,6 +324,8 @@ public sealed class ConfigWindow : Window
             _config.EndlessTreasureMapFarm, v => _config.EndlessTreasureMapFarm = v);
         Ui.Tooltip("Keep the Mysterious Map farm running and restocking past the Alexandrite target until you press Stop.");
 
+        DrawInventory();
+
         ImGui.Separator();
         ImGui.TextDisabled("Animus (Books / Trials of the Braves)");
         var fateRotate = _config.FateRotateSeconds;
@@ -309,6 +337,37 @@ public sealed class ConfigWindow : Window
         Ui.Tooltip("How long to wait at an unspawned book FATE before rotating to the next one.\n\n" +
             "The first pass just glances at each FATE; later passes wait this many seconds. " +
             "0 waits indefinitely. Default 120.");
+
+        Checkbox("Drop level sync to survive a FATE you are losing", _config.FateUnsyncOnLowHp,
+            v => _config.FateUnsyncOnLowHp = v);
+        Ui.Tooltip("Level sync is what lets you fight a FATE — and what lets a FATE boss kill you. " +
+            "Below the health threshold, Relicable turns sync off: you go back to full level, full " +
+            "health and full mitigation against enemies now far beneath you.\n\n" +
+            "That FATE will not credit, which is the point — dying costs far more, since recovery " +
+            "returns you to a home aetheryte and restarts the objective from its teleport. It does " +
+            "NOT fire if the enemy is going to die before you do.");
+
+        if (_config.FateUnsyncOnLowHp)
+        {
+            var bail = _config.FateUnsyncHpPercent;
+            if (ImGui.SliderInt("Drop sync below (% health)", ref bail, 1, 50))
+            {
+                _config.FateUnsyncHpPercent = bail;
+                _dirty = true;
+            }
+            var back = _config.FateResyncHpPercent;
+            if (ImGui.SliderInt("Re-sync above (% health)", ref back, 20, 100))
+            {
+                _config.FateResyncHpPercent = back;
+                _dirty = true;
+            }
+            Ui.Tooltip("Health at which the run syncs back in and resumes FATEs. Keep it well clear " +
+                "of the drop threshold so a couple of ticks of regen cannot bounce you straight back " +
+                "into the fight that just went wrong.");
+            if (_config.FateResyncHpPercent <= _config.FateUnsyncHpPercent)
+                Ui.Wrapped(Red, "The re-sync threshold must be above the drop threshold, or the run will " +
+                    "sync straight back in at the health it just bailed out at.");
+        }
 
         Checkbox("Grab FATEs that are already up nearby",
             _config.PreferCoLocatedFates, v => _config.PreferCoLocatedFates = v);
@@ -447,6 +506,202 @@ public sealed class ConfigWindow : Window
         {
             _pi.SavePluginConfig(_config);
             _dirty = false;
+        }
+    }
+
+    // ---- Auto-discard ----
+    //
+    // Discarding is permanent and, by design, silent -- so this section is built around showing the
+    // consequence BEFORE it is switched on: the table is the live output of the same rules the
+    // engine runs, i.e. exactly what would be deleted right now. The two per-row buttons write the
+    // always/never lists, which is also how you correct a verdict you disagree with.
+    private List<Steps.AutoDiscard.BagEntry>? _bagPreview;
+    private long _bagPreviewAt;
+
+    // The bag scan touches ~140 slots and an Excel row each; refresh it about once a second rather
+    // than every frame the window is open.
+    private const long BagPreviewRefreshMs = 1000;
+
+    private void DrawInventory()
+    {
+        ImGui.Separator();
+        ImGui.TextDisabled("Inventory");
+
+        Checkbox("Auto-discard mob drops", _config.AutoDiscardDrops, v =>
+        {
+            _config.AutoDiscardDrops = v;
+            Steps.AutoDiscard.ClearRefused();
+        });
+        Ui.Tooltip("Delete drop clutter from your bags as it accumulates, so a long unattended run " +
+            "does not stop looting on a full inventory.\n\n" +
+            "There is no confirmation window and nothing to answer — items go immediately and " +
+            "permanently. The table below shows exactly what would go right now.");
+
+        if (!_config.AutoDiscardDrops)
+        {
+            Ui.Note("Off. Nothing is ever deleted while this is unticked.");
+            return;
+        }
+
+        Ui.Wrapped(Red, "Discarded items are gone permanently — there is no confirmation and no way to get them back. " +
+            "Check the table below before leaving a long run unattended.");
+
+        var mode = (int)_config.AutoDiscardMode;
+        if (ImGui.Combo("What to discard", ref mode, "Only my discard list\0All low-value materials\0"))
+        {
+            _config.AutoDiscardMode = (Configuration.DiscardMode)mode;
+            Steps.AutoDiscard.ClearRefused();
+            _bagPreviewAt = 0;
+            _dirty = true;
+        }
+        Ui.Tooltip("'Only my discard list' deletes nothing except the items you tick below — predictable, " +
+            "but you have to seed it once.\n\n" +
+            "'All low-value materials' is the hands-off setting: ordinary white, stackable, non-usable " +
+            "crafting materials worth at most the vendor price below. Gear, anything usable, HQ, " +
+            "collectables, materia and every relic material are excluded no matter what.");
+
+        Checkbox("Only while automation is running", _config.AutoDiscardOnlyWhileRunning,
+            v => _config.AutoDiscardOnlyWhileRunning = v);
+        Ui.Tooltip("Recommended on: nothing is deleted while you are playing normally, only during a run. " +
+            "Turn off to keep the bags clear all the time.");
+
+        if (_config.AutoDiscardMode == Configuration.DiscardMode.LowValueMaterials)
+        {
+            var cap = _config.AutoDiscardMaxVendorPrice;
+            if (ImGui.InputInt("Discard at or under (gil to a vendor)", ref cap))
+            {
+                _config.AutoDiscardMaxVendorPrice = cap < 0 ? 0 : cap;
+                Steps.AutoDiscard.ClearRefused();
+                _bagPreviewAt = 0;
+                _dirty = true;
+            }
+            Ui.Tooltip("Compared against what a vendor pays for the item. ARR mob drops sit in the single " +
+                "and double digits, so the default of 100 keeps anything actually worth carrying.\n\n" +
+                "This is a vendor price, not a market price — raise it carefully.");
+        }
+
+        var status = Steps.AutoDiscard.LastAction;
+        Ui.Wrapped(Grey, $"Discarded this session: {Steps.AutoDiscard.DiscardedThisSession}"
+            + (string.IsNullOrEmpty(status) ? string.Empty : $"  —  last: {status}"));
+
+        DrawBagPreview();
+    }
+
+    private void DrawBagPreview()
+    {
+        var now = System.Environment.TickCount64;
+        if (_bagPreview == null || now - _bagPreviewAt > BagPreviewRefreshMs)
+        {
+            _bagPreview = Steps.AutoDiscard.Preview();
+            _bagPreviewAt = now;
+        }
+
+        var going = 0;
+        foreach (var e in _bagPreview)
+            if (e.WouldDiscard)
+                going++;
+
+        if (!ImGui.CollapsingHeader($"Your bags — {going} stack(s) would be discarded now###relicable_discard_preview"))
+            return;
+
+        Ui.Note("'Keep' never deletes that item again. 'Discard' always deletes it, even in list-only mode. " +
+            "Protected rows are ones the rules refuse to touch (gear, usable items, HQ, materia, relic materials).");
+
+        if (!ImGui.BeginTable("relicable_discard_tbl", 5,
+                ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.ScrollY,
+                new Vector2(0, 220)))
+            return;
+
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 40);
+        ImGui.TableSetupColumn("Vendor", ImGuiTableColumnFlags.WidthFixed, 55);
+        ImGui.TableSetupColumn("Verdict", ImGuiTableColumnFlags.WidthFixed, 75);
+        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 110);
+        ImGui.TableHeadersRow();
+
+        foreach (var e in _bagPreview)
+        {
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted(string.IsNullOrEmpty(e.Name) ? $"#{e.ItemId}" : e.Name);
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(e.Quantity.ToString());
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(e.VendorPrice.ToString());
+
+            ImGui.TableNextColumn();
+            if (e.WouldDiscard)
+                ImGui.TextColored(Red, "discard");
+            else if (_config.NeverDiscardItemIds.Contains(e.ItemId))
+                ImGui.TextColored(Green, "kept");
+            else if (e.Safe)
+                ImGui.TextColored(Grey, "eligible");
+            else
+                ImGui.TextColored(Grey, "protected");
+
+            ImGui.TableNextColumn();
+            // Only offer the buttons where they mean something: an item the rules protect outright
+            // cannot be forced onto the discard list, so showing the button would be a lie.
+            if (e.Safe)
+            {
+                if (ImGui.SmallButton($"Keep##k{e.ItemId}"))
+                {
+                    _config.DiscardItemIds.Remove(e.ItemId);
+                    if (!_config.NeverDiscardItemIds.Contains(e.ItemId))
+                        _config.NeverDiscardItemIds.Add(e.ItemId);
+                    Steps.AutoDiscard.ClearRefused();
+                    _bagPreviewAt = 0;
+                    _dirty = true;
+                }
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"Discard##d{e.ItemId}"))
+                {
+                    _config.NeverDiscardItemIds.Remove(e.ItemId);
+                    if (!_config.DiscardItemIds.Contains(e.ItemId))
+                        _config.DiscardItemIds.Add(e.ItemId);
+                    Steps.AutoDiscard.ClearRefused();
+                    _bagPreviewAt = 0;
+                    _dirty = true;
+                }
+            }
+            else
+            {
+                ImGui.TextColored(Grey, "-");
+            }
+        }
+
+        ImGui.EndTable();
+
+        DrawIdList("Always discard", _config.DiscardItemIds, "ad");
+        DrawIdList("Never discard", _config.NeverDiscardItemIds, "nd");
+    }
+
+    // The saved lists, so an entry for an item that is not in your bags right now (and so has no
+    // row in the table above) can still be seen and removed.
+    private void DrawIdList(string label, List<uint> ids, string tag)
+    {
+        if (ids.Count == 0)
+            return;
+        ImGui.Spacing();
+        ImGui.TextDisabled($"{label} ({ids.Count})");
+        for (var i = ids.Count - 1; i >= 0; i--)
+        {
+            var id = ids[i];
+            if (ImGui.SmallButton($"x##{tag}{id}"))
+            {
+                ids.RemoveAt(i);
+                Steps.AutoDiscard.ClearRefused();
+                _bagPreviewAt = 0;
+                _dirty = true;
+                continue;
+            }
+            ImGui.SameLine();
+            var name = Steps.GameState.ItemName(id);
+            ImGui.TextUnformatted(string.IsNullOrEmpty(name) ? $"#{id}" : name);
         }
     }
 

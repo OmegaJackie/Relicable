@@ -404,6 +404,75 @@ public sealed class Configuration : IPluginConfiguration
     public bool PauseIfTargetedByPlayer { get; set; }
     public bool PauseOnTell { get; set; }
 
+    // ---- Auto-discard (see Steps/AutoDiscard.cs) ----
+    //
+    // Discarding is PERMANENT and deliberately silent -- no confirmation is shown, which is the
+    // whole point of the feature (a long unattended grind fills the bags with mob drops). So the
+    // toggle is off by default and every gate below is on the cautious side.
+    public bool AutoDiscardDrops { get; set; }
+
+    public enum DiscardMode
+    {
+        // Only the ids in DiscardItemIds. Predictable; nothing is deleted that was not named.
+        ListOnly,
+        // Rule-driven: common (white), stackable, non-usable, non-equippable, tradeable materials
+        // whose vendor price is at or under AutoDiscardMaxVendorPrice -- i.e. ordinary mob-drop
+        // clutter. Every relic material the plugin knows about is protected regardless.
+        LowValueMaterials,
+    }
+
+    // Default LowValueMaterials so switching the toggle on does the hands-off thing that was asked
+    // for; the configuration window shows a live list of exactly what would go before you enable it.
+    // Persisted as an int like every other enum here (this file is written by Newtonsoft).
+    public DiscardMode AutoDiscardMode { get; set; } = DiscardMode.LowValueMaterials;
+
+    // Only discard while the automation is actually running, so nothing is deleted out from under
+    // you during normal manual play. On by default.
+    public bool AutoDiscardOnlyWhileRunning { get; set; } = true;
+
+    // LowValueMaterials only: the vendor (sell) price at or below which a material counts as
+    // clutter. ARR mob drops sit in the single/double digits; 100 keeps anything worth carrying.
+    public int AutoDiscardMaxVendorPrice { get; set; } = 100;
+
+    // Always discard these item ids (both modes). Never discard these ones (wins over everything).
+    public System.Collections.Generic.List<uint> DiscardItemIds { get; set; } = new();
+    public System.Collections.Generic.List<uint> NeverDiscardItemIds { get; set; } = new();
+
+    // FATE survival fallback (Steps/Combat/FateSyncGuard.cs). Level sync is what makes FATE combat
+    // work, and also what makes a boss FATE able to kill a relic-geared character -- and dying costs
+    // far more than one FATE (the death recovery Returns home and restarts the objective). Below
+    // FateUnsyncHpPercent, drop the sync and forfeit that FATE's credit rather than die; re-sync
+    // once health is back above FateResyncHpPercent. Skipped when the mob will die first.
+    public bool FateUnsyncOnLowHp { get; set; } = true;
+    public int FateUnsyncHpPercent { get; set; } = 10;
+    public int FateResyncHpPercent { get; set; } = 60;
+
+    // The Atma weapon whose Trials of the Braves books this install actually drove to completion
+    // (0 = none). PERSISTED, and that is the whole point of it.
+    //
+    // The game keeps the last bought Relic Note active forever, so "note 9, complete, on an Atma
+    // weapon" is two different situations wearing the same face: a repeat relic's fresh Atma that
+    // inherited the PREVIOUS relic's finished note (buy book 1 and grind again), or a weapon that
+    // just finished its own nine books (go do the Atma -> Animus enhancement at Jalzahn). Nothing
+    // in game memory tells them apart, so the only witness is whether WE drove the books.
+    //
+    // That witness used to live in a field, which meant a plugin reload or a game restart between
+    // finishing book 9 and pressing Start erased it -- and the run then read a freshly-finished book
+    // run as a stale note and bought book 1, restarting a nine-book grind for 500 poetics. Cleared
+    // again the moment the weapon reaches Animus, so the NEXT relic on the same job (same item id)
+    // starts its books properly instead of inheriting this one's answer.
+    public uint AnimusBooksDrivenWeaponId { get; set; }
+
+    // Global aggro backstop (Steps/Combat/AggroWatchdog.cs). Every executor that fights already
+    // defends itself, but only the branches that opted in -- and the branches that got missed are
+    // the travel and wait legs, which is where an ambient mob actually lands on you. This watches
+    // from outside the executors: when something is engaged with us, nothing is engaged with IT, and
+    // that has held for AggroWatchdogSeconds (x3 while still moving, since a mob picked up in
+    // passing usually drops on its own), it stops and fights back. Stands down inside a FATE, where
+    // being surrounded is normal and the FATE executor owns targeting and level sync.
+    public bool AggroWatchdog { get; set; } = true;
+    public int AggroWatchdogSeconds { get; set; } = 5;
+
     // Combat assist
     public bool AutoSummonChocobo { get; set; } = true;
     public bool ChocoboHealerStance { get; set; } = true;
