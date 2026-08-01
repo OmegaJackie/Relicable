@@ -242,6 +242,95 @@ public sealed class Targeting
         return true;
     }
 
+    // "Something is aggroed onto me" -- the aggro-list question, asked WITHOUT relying on the mob
+    // currently pointing its TargetObjectId at us.
+    //
+    // FindNearestAggressor above answers a narrower question ("who is targeting me right now"), and
+    // that narrowness is why aggroed enemies kept going unfought. TargetObjectId is a live pointer,
+    // not an enmity record: it reads 0 while a mob is still pathing toward us after pulling, and it
+    // swings onto a passing NPC, another player, or a summon for whole seconds at a time. Every miss
+    // means the caller concludes "nothing is on us" and walks off / stands there.
+    //
+    // The nameplate COLOUR is the enmity record. The game colours a plate from the enmity table, so
+    // it stays orange/red for the whole time a mob is engaged with our party no matter where its
+    // instantaneous target points:
+    //     7  yellow  hostile, NOT engaged      -- an ordinary wandering mob; must NOT match
+    //     9  red     engaged with us, damaged
+    //     10 purple  engaged with SOMEONE ELSE -- their fight; must NOT match
+    //     11 orange  engaged with us, undamaged (pulled, still closing -- the case TargetObjectId misses)
+    // This is the same native read ECommons.IsHostile already uses, so it costs nothing extra and
+    // needs no new signature.
+    //
+    // The TargetObjectId test is kept as a union rather than replaced: it is the one that catches a
+    // mob whose enmity has flipped onto the CHOCOBO (allyId), which the plate colour reports as our
+    // party's fight anyway but which we do not want to depend on.
+    //
+    // preferredId: the mob the caller is already fighting, returned regardless of distance while it
+    // is still a valid aggressor -- the same commitment lock FindNearestEnemy takes, and needed for
+    // the same reason. Two mobs on us swap places as they circle, so a per-tick nearest pick would
+    // re-target (and re-mark, and re-dispatch the backend) every frame, which is precisely the mode
+    // thrash that stops RSR ever settling into its rotation.
+    //
+    // syncedFateId: the FATE we are currently level-synced to (0 = none). A FATE mob we are NOT
+    // synced to is EXCLUDED, and that exclusion is load-bearing rather than tidiness: the combat
+    // backend drops any FATE mob whose FateId does not match the player's synced FATE, so engaging
+    // one would hard-target something nothing will ever cast at. FATE mobs chase well outside the
+    // ring, so "am I standing in a FATE" does not cover this -- the mob leaves the ring with us and
+    // the ring test says no FATE. Excluding it here hands the situation back to the FATE executor,
+    // which owns getting into the ring and syncing. This is the same guard every other finder in
+    // this file applies in its own form (FindNearestEnemy excludes FATE mobs outright;
+    // NearestHostileInFate requires the exact id).
+    public IGameObject? FindNearestAggroedEnemy(ulong playerId, ulong allyId, float radius,
+        ushort syncedFateId, ulong preferredId = 0)
+    {
+        var me = _provider.PlayerPosition;
+        var maxSq = radius * radius;
+        var candidates = _provider.Objects
+            .Where(o => o.ObjectKind == ObjectKind.BattleNpc)
+            .Where(IsAttackable)
+            .Where(o => o.IsHostile())
+            .Where(o => Vector3.DistanceSquared(me, o.Position) <= maxSq)
+            .Where(o => MobFateId(o) == 0 || MobFateId(o) == syncedFateId)
+            .Where(o => IsAggroedOnUs(o, playerId, allyId))
+            .ToList();
+
+        if (preferredId != 0)
+        {
+            var locked = candidates.FirstOrDefault(o => o.GameObjectId == preferredId);
+            if (locked != null)
+                return locked;
+        }
+
+        return candidates
+            .OrderBy(o => Vector3.DistanceSquared(me, o.Position))
+            .FirstOrDefault();
+    }
+
+    // Whether THIS object is engaged with us (see FindNearestAggroedEnemy). Public so a caller
+    // holding a target already -- the watchdog checking "is the thing we are pointed at actually the
+    // thing fighting us" -- can ask about it without re-scanning the table.
+    public static bool IsAggroedOnUs(IGameObject? o, ulong playerId, ulong allyId)
+    {
+        if (o == null || o.Address == nint.Zero)
+            return false;
+        if (playerId != 0 && o.TargetObjectId == playerId)
+            return true;
+        if (allyId != 0 && o.TargetObjectId == allyId)
+            return true;
+        // Guarded because this resolves a signature-scanned native on first use; a failure here must
+        // read as "not aggroed" rather than take down the framework tick.
+        try
+        {
+            return o.GetNameplateKind()
+                is NameplateKind.HostileEngagedSelfDamaged
+                or NameplateKind.HostileEngagedSelfUndamaged;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // Authoritative path for Trials of the Braves monster slots: ask the game,
     // via RelicNote.IsMonsterNoteTarget, whether each candidate counts toward the
     // currently active relic note. This avoids name-matching entirely and is

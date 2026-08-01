@@ -200,6 +200,16 @@ public sealed class Plugin : IDalamudPlugin
 
         _controller = new RelicController(ctx, objectives, executors, dependencies);
 
+        // Silent inventory cleanup. The protected-id set is a LAMBDA, not a snapshot: it is
+        // evaluated on first use (the Item sheet and the data catalogues are not all resolved this
+        // early) and rebuilt until it comes back non-empty. Reading it off the loaded objectives
+        // means every material the relic line counts is protected the moment its objective exists,
+        // with nothing to keep in sync by hand.
+        Steps.AutoDiscard.Configure(
+            _config,
+            () => _controller.Current is not (RelicController.State.Idle or RelicController.State.Stopped),
+            () => ProtectedItemIds(objectives));
+
         _novusWindow = new NovusWindow(_config, planner, _novusRunner, () => PluginInterface.SavePluginConfig(_config));
 
         // Braves (il125) planner: its own Universalis client so its item set does not
@@ -255,7 +265,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Commands.AddHandler("/relic", new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the Relicable window. Subcommands: config, novus, braves, questmap, start, stop, reload.",
+            HelpMessage = "Open the Relicable window. Subcommands: config, novus, braves, questmap, start, stop, reload, booksdone.",
         });
 
         // Resolve the one native signature this plugin sig-scans (the retainer item command)
@@ -305,6 +315,54 @@ public sealed class Plugin : IDalamudPlugin
         // Braves (il125) material-quest dungeons: the controller runs the active quest's set.
         objectives.AddRange(Braves.BravesDungeonGenerator.Generate());
         return objectives;
+    }
+
+    // Every item id the relic line itself cares about, for the auto-discard guard. Read off the
+    // loaded objectives (each slot/farm objective names the item it counts, and the upgrade ones
+    // name the weapon), plus the catalogues whose ids never appear in an objective: all materia,
+    // Alexandrite, the Radz-at-Han oil, both treasure maps, and the Thavnairian mist.
+    //
+    // Derived rather than authored on purpose -- a hand-kept list of "do not delete" ids is exactly
+    // the thing that goes stale the next time a stage is added.
+    private static IEnumerable<uint> ProtectedItemIds(IReadOnlyList<Model.RelicObjective> objectives)
+    {
+        var ids = new HashSet<uint>();
+        foreach (var o in objectives)
+        {
+            Add(o.Completion.ItemId);
+            Add(o.Completion.ExpectedRelicItemId);
+            Add(o.RequiredWeaponItemId);
+            foreach (var s in o.Steps)
+            {
+                Add(s.ItemId);
+                Add(s.ExpectedRelicItemId);
+            }
+        }
+
+        // Catalogue ids resolve off the Item sheet, so any of these can legitimately be 0 while the
+        // sheet is still loading -- Add skips those and AutoDiscard re-asks until the set fills in.
+        try
+        {
+            foreach (var m in MateriaCatalog.AllMateriaItemIds())
+                Add(m);
+            Add(NovusData.AlexandriteItemId);
+            Add(NovusData.RadzOilItemId);
+            Add(NovusData.MysteriousMapItemId);
+            Add(NovusData.AlexandriteMapItemId);
+            Add(ZenithData.MistItemId);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning($"Relicable: auto-discard protected-id catalogue lookup failed: {ex.Message}");
+        }
+
+        return ids;
+
+        void Add(uint id)
+        {
+            if (id != 0)
+                ids.Add(id);
+        }
     }
 
     // The one place the plugin's main window is opened, so a locked build always lands on
@@ -370,6 +428,10 @@ public sealed class Plugin : IDalamudPlugin
         // state, so it survives a Stop); it self-gates on a leve-activity window StartLeveExecutor keeps
         // warm, so it is inert -- and leaves YesAlready alone -- outside that brief window.
         Steps.Interaction.LeveReturn.Tick();
+        // Silent inventory cleanup (off by default). Driven here rather than from an executor
+        // because bags fill up across every stage, not during one step -- and, like the leve
+        // handler, it self-gates rather than being tied to the run state.
+        Steps.AutoDiscard.Tick();
         _controller.Tick();
     }
 
@@ -423,6 +485,14 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case "stop": _controller.Stop(); break;
             case "reload": _controller.ReloadObjectives(LoadObjectives()); break;
+            // The one thing the game cannot tell us. A finished Relic Note stays active forever, so
+            // a complete last book on an Atma weapon means either "this weapon's nine books are
+            // done" or "this is a new relic wearing the previous one's leftover note" -- and on a
+            // REPEAT relic nothing in memory separates them. Relicable normally remembers which it
+            // drove; this is how you tell it directly when that record is missing (it was lost with
+            // the plugin reload, or you did the books by hand), instead of watching it buy book 1
+            // and grind all nine again.
+            case "booksdone": Log.Information("Relicable: " + _controller.MarkAnimusBooksDone()); break;
             default: _mainWindow.Toggle(); break;
         }
     }
@@ -535,6 +605,7 @@ public sealed class Plugin : IDalamudPlugin
         // gone (the leve-return handler adds it while running). Must run before ECommonsMain.Dispose,
         // which tears down the EzSharedData plumbing this reads.
         Steps.Interaction.LeveReturn.Release();
+        Steps.AutoDiscard.Release();
         _universalis.Dispose();
         _bravesUniversalis.Dispose();
         PluginInterface.SavePluginConfig(_config);

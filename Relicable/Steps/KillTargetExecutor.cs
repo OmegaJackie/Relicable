@@ -81,12 +81,45 @@ public sealed class KillTargetExecutor : ITaskExecutor
     private ulong _stuckId;
     private long _stuckUntil;
 
+    // Debounced line-of-sight state for the mob we are engaging, plus the escalation clocks.
+    // Keyed on the target id so switching mobs (or retargeting to an add) starts clean.
+    private bool _losBlocked;
+    private long _losBlockedSince;
+    private long _losClearSince;
+    private ulong _losTargetId;
+    private long _lastLosRepath;
+    // Edge latch for the engage branch's Stop(). Without it we fired the stop IPC every tick while
+    // standing in melee, which also cleared vnav's cached destination every tick -- so any branch
+    // flip re-pathed from scratch instead of continuing.
+    private bool _engageStopped;
+
     // How much closer (yalms) counts as real approach progress, and how long without it before we
     // treat the locked mob as unreachable. Generous so a normal winding flight -- which closes far
     // more than this in seconds -- never trips it; only a genuinely stuck approach does.
     private const float StallProgress = 3f;
     private const long StallTimeoutMs = 12000;
     private const long StuckCooldownMs = 20000;
+
+    // ---- Line-of-sight recovery (blocked shot on a mob we are already "in range" of) ----
+    //
+    // The stall guard above lives in the TRAVEL branch, so it only ever sees a mob we are far from.
+    // A mob on another elevation tier -- one we are standing under a ledge from -- is CLOSE, so the
+    // engage branch owns it and nothing timed it out: the rotation will not fire (RSR drops a
+    // no-line-of-sight target), the "hug the hitbox" nudge cannot clear a cliff, and the character
+    // shuffles on the spot indefinitely. That is the reported "jittering in one spot, stuck".
+    //
+    // Two separate things were wrong and both are fixed here:
+    //   * The raycast was acted on RAW. A single frame either way flipped between "close in" and
+    //     Stop(), and NavmeshIpc.Stop() is not edge-triggered -- it drops the cached destination on
+    //     every call -- so a flickering line of sight re-pathed the character every frame. Hence the
+    //     jitter, and hence LosConfirmMs debouncing the reading in both directions.
+    //   * Nothing escalated. Now a shot blocked for LosRepathMs forces a real re-path (see the
+    //     engage branch), and one still blocked at LosGiveUpMs blacklists the mob so another is
+    //     taken -- the same non-failing escape the travel branch already had.
+    private const long LosConfirmMs = 400;
+    private const long LosRepathMs = 3000;
+    private const long LosRepathRetryMs = 4000;
+    private const long LosGiveUpMs = 15000;
 
     // ---- Multi-name grind (StepData.TargetNames; the base relic's three-beastman hunt) ----
     //
@@ -173,6 +206,8 @@ public sealed class KillTargetExecutor : ITaskExecutor
         _lockProgressAt = 0;
         _stuckId = 0;
         _stuckUntil = 0;
+        ResetLineOfSight();
+        _engageStopped = false;
         ResetSearch();
     }
 
@@ -325,6 +360,7 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 if (add != null && Vector3.Distance(self, add.Position) > EngageRangeFor(add))
                 {
                     Log($"add aggroed at range; closing to reach it while fighting ({Combat.EngageBand.RoleLabel()})");
+                    _engageStopped = false; // something else is moving us; the engage stop must re-arm
                     ctx.Navmesh.MoveCloseTo(add.Position, false, StopRangeFor(add));
                 }
                 else
@@ -434,12 +470,19 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 // (still inside the band), chase it ON FOOT but KEEP RSR enabled -- do NOT disable
                 // it for a small correction, which is exactly what produced the Off/On thrash.
                 var fightTarget = Plugin.TargetManager.Target;
+                // Debounce the raycast before branching on it (see LosConfirmMs): acting on the raw
+                // per-frame reading is what made a marginal line of sight alternate between "close
+                // in" and Stop() every tick, and a per-tick Stop() re-paths from scratch.
+                var losBlocked = UpdateLineOfSight(fightTarget?.GameObjectId ?? 0, self, fightPos);
+                var now = System.Environment.TickCount64;
+
                 if (fightDist > EngageRangeFor(fightTarget))
                 {
                     Log($"target at {fightDist:F1}y; closing on foot while engaged ({Combat.EngageBand.RoleLabel()})");
+                    _engageStopped = false;
                     ctx.Navmesh.MoveCloseTo(fightPos, false, StopRangeFor(fightTarget));
                 }
-                else if (!HasLineOfSight(self, fightPos))
+                else if (losBlocked)
                 {
                     // In melee range, but terrain blocks the line of sight to the target (we landed under
                     // a ledge / on a lower tier -- LandAndDismount descends to the floor BELOW the mob).
@@ -453,13 +496,67 @@ public sealed class KillTargetExecutor : ITaskExecutor
                     // mob is inside its collision, which the navmesh can never reach, so it would path
                     // forever instead of clearing the block. For a ranged job this is also the one case
                     // that overrides the standoff band: a cast the terrain eats is a silent no-op.
-                    Log($"target in range ({fightDist:F1}y) but no line of sight; closing in to clear it");
-                    ctx.Navmesh.MoveCloseTo(fightPos, false, 1f + (fightTarget?.HitboxRadius ?? 0f));
+                    var blockedFor = now - _losBlockedSince;
+                    var hug = 1f + (fightTarget?.HitboxRadius ?? 0f);
+
+                    if (blockedFor >= LosGiveUpMs)
+                    {
+                        // Still no shot after all that: the mob is somewhere we cannot get a line to.
+                        // Take the travel branch's escape -- blacklist it briefly so the next acquire
+                        // picks a different mob -- rather than standing here for the rest of the run.
+                        var giveUpId = _losTargetId;
+                        Log($"no line of sight to the target for {LosGiveUpMs / 1000}s and re-pathing did not " +
+                            "clear it; blacklisting this mob and taking another");
+                        if (giveUpId != 0)
+                        {
+                            _stuckId = giveUpId;
+                            _stuckUntil = now + StuckCooldownMs;
+                            if (_travelLockId == giveUpId)
+                                _travelLockId = 0;
+                        }
+                        ResetLineOfSight();
+                        _engageStopped = false;
+                        ctx.Navmesh.Stop();
+                        return ExecutorStatus.InProgress;
+                    }
+
+                    if (blockedFor >= LosRepathMs && now - _lastLosRepath >= LosRepathRetryMs)
+                    {
+                        // Hugging the hitbox cannot clear a cliff: on an elevation break the straight
+                        // line runs into the wall we are standing under, and closing in just presses us
+                        // against it. Force a genuine RE-PATH instead, and aim it at the navmesh point
+                        // nearest the MOB rather than the mob's centre -- for a mob up on a ledge that
+                        // point sits on the ledge, so vnav routes around and up to it. Stop() first
+                        // because MoveCloseTo is deduplicated: without dropping the cached destination
+                        // it would keep following the same dead path.
+                        _lastLosRepath = now;
+                        var spot = FindShootingSpot(ctx, self, fightPos, 3f + (fightTarget?.HitboxRadius ?? 0f));
+                        var reachable = spot ?? ctx.Navmesh.NearestPoint(fightPos, 5f, 10f) ?? fightPos;
+                        Log($"no line of sight for {blockedFor / 1000}s at {fightDist:F1}y; re-pathing to " +
+                            (spot != null ? "a spot with a clear line to the target" : "the nearest navmesh point to the target"));
+                        ctx.Navmesh.Stop();
+                        _engageStopped = false;
+                        // Tight stop range: the point was chosen BECAUSE it has the line, so stopping
+                        // short of it is stopping short of the shot.
+                        ctx.Navmesh.MoveCloseTo(reachable, false, spot != null ? 1f : hug);
+                    }
+                    else
+                    {
+                        Log($"target in range ({fightDist:F1}y) but no line of sight; closing in to clear it");
+                        _engageStopped = false;
+                        ctx.Navmesh.MoveCloseTo(fightPos, false, hug);
+                    }
                 }
                 else
                 {
                     Log($"target in range ({fightDist:F1}y); engaging");
-                    ctx.Navmesh.Stop();
+                    // Stop ONCE. Firing the stop IPC every tick also clears vnav's cached destination
+                    // every tick, so the next move can never continue -- it always re-paths.
+                    if (!_engageStopped)
+                    {
+                        _engageStopped = true;
+                        ctx.Navmesh.Stop();
+                    }
                 }
 
                 // Attack1-mark the PRIORITY hard target (the add we just switched to, or the relic
@@ -556,6 +653,10 @@ public sealed class KillTargetExecutor : ITaskExecutor
                 }
 
                 Log($"mob located at {mobDist:F1}y; closing in ({Combat.EngageBand.RoleLabel()})");
+                // Travelling, so the engage branch's one-shot stop must re-arm for the next arrival,
+                // and the line-of-sight clocks belong to a fight we are no longer in.
+                _engageStopped = false;
+                ResetLineOfSight();
                 ctx.Rotation.Disable();
                 if (mobDist > FlyMinDistance)
                     Combat.Mount.EnsureMounted(ctx, mobDist);
@@ -799,6 +900,96 @@ public sealed class KillTargetExecutor : ITaskExecutor
         ctx.Rotation.Disable();
         Combat.Mount.LandAndDismount(ctx, mobPos);
         return false;
+    }
+
+    // Debounced "is the shot blocked?" for the mob we are engaging, and the clock the escalations
+    // above read. Returns the STABLE answer, not this frame's raycast.
+    //
+    // The raycast is a single ray between two moving points, so on a marginal line -- a mob pacing
+    // behind a rock, a slope, our own drift -- it flips frame to frame. Branching on that raw value
+    // alternated between closing in and stopping, and because NavmeshIpc.Stop() drops the cached
+    // destination on every call, each flip re-pathed the character: the reported jitter. A reading
+    // has to hold for LosConfirmMs before it is believed, in EITHER direction.
+    //
+    // _losBlockedSince is the start of the current continuous block, which is what makes "cannot
+    // make a direct shot for x seconds" measurable; it survives the debounce so a brief flicker of
+    // clear line does not reset the escalation clock unless it actually holds.
+    private bool UpdateLineOfSight(ulong targetId, Vector3 from, Vector3 to)
+    {
+        var now = System.Environment.TickCount64;
+        // A different mob (or an add we just retargeted onto) is a different question entirely.
+        if (targetId != _losTargetId)
+        {
+            ResetLineOfSight();
+            _losTargetId = targetId;
+        }
+
+        if (HasLineOfSight(from, to))
+        {
+            _losBlockedSince = 0;
+            if (_losClearSince == 0)
+                _losClearSince = now;
+            if (now - _losClearSince >= LosConfirmMs)
+                _losBlocked = false;
+        }
+        else
+        {
+            _losClearSince = 0;
+            if (_losBlockedSince == 0)
+                _losBlockedSince = now;
+            if (now - _losBlockedSince >= LosConfirmMs)
+                _losBlocked = true;
+        }
+        return _losBlocked;
+    }
+
+    // A spot near the mob that we could actually shoot it FROM: sample the navmesh in a ring around
+    // it and keep the candidate closest to us that has a clear line to it.
+    //
+    // This is what makes the re-path a fix rather than a retry. Re-aiming at the mob's own centre
+    // does nothing on an elevation break -- that is the direction we are already pressed into the
+    // cliff from -- whereas the candidates that pass the raycast are, by construction, the ones on
+    // the mob's own tier, so vnav is handed a destination that resolves the block and routes around
+    // to it. Null when nothing around the mob both sits on the navmesh and has the line, which is
+    // the honest answer for a mob genuinely shut away behind geometry; the caller then falls back,
+    // and the give-up timer takes it from there.
+    //
+    // Only runs on the re-path escalation (every LosRepathRetryMs), so the eight floor probes and
+    // eight raycasts are nowhere near a per-tick cost.
+    private static Vector3? FindShootingSpot(ExecutionContext ctx, Vector3 me, Vector3 mobPos, float radius)
+    {
+        Vector3? best = null;
+        var bestDist = float.MaxValue;
+        for (var i = 0; i < 8; i++)
+        {
+            var angle = i * (System.MathF.PI * 2f / 8f);
+            // Probe slightly ABOVE the mob's feet so the floor search resolves onto its own tier
+            // rather than dropping to whatever is underneath it.
+            var probe = new Vector3(
+                mobPos.X + System.MathF.Cos(angle) * radius,
+                mobPos.Y + 1f,
+                mobPos.Z + System.MathF.Sin(angle) * radius);
+            if (ctx.Navmesh.PointOnFloor(probe, false, 5f) is not { } spot)
+                continue;
+            if (!HasLineOfSight(spot, mobPos))
+                continue;
+            var d = Vector3.Distance(me, spot);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = spot;
+            }
+        }
+        return best;
+    }
+
+    private void ResetLineOfSight()
+    {
+        _losBlocked = false;
+        _losBlockedSince = 0;
+        _losClearSince = 0;
+        _losTargetId = 0;
+        _lastLosRepath = 0;
     }
 
     // Whether world geometry does NOT block the straight line from the player's eye to the mob's eye

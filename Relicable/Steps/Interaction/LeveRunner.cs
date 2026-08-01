@@ -42,6 +42,14 @@ internal sealed unsafe class LeveRunner
     private enum LureResult { Approaching, Waiting, Fired, CannotUse }
 
     private const float ArriveRange = 5.0f;
+    // Leve anchor floor snap (EnsureAnchorSnapped). Probe this far ABOVE the sheet position, over a
+    // small box, and only accept a floor that comes back at least AnchorLiftMin above it.
+    private const float AnchorProbeUp = 10.0f;
+    private const float AnchorProbeExtent = 3.0f;
+    private const float AnchorLiftMin = 1.0f;
+    // Travel stall guard (WatchTravelStall).
+    private const float TravelProgress = 3.0f;
+    private const long TravelStallMs = 15000;
 
     // Combat distances live in Combat.EngageBand, shared with the kill grind and the FATE loop.
     // It keeps the hysteresis those needed -- once engaged, keep fighting until the mob is beyond a
@@ -107,8 +115,30 @@ internal sealed unsafe class LeveRunner
     // ---- Escort leves ----
     private const float EscortArrive = 4.0f;        // advance to the next waypoint within this
     private const float EscortEngageRange = 15.0f;  // only break to fight a hostile this close
-    private const float HoundLagDistance = 8.0f;    // pause + re-beckon if the hound falls this far behind
+    // Hound-lag HYSTERESIS, and the two bands are the fix for the reported "extremely janky, moves
+    // in tiny steps". There used to be one 8y threshold with an unconditional Stop() on the far
+    // side of it -- but an escort NPC follows at roughly player pace, so the gap sits ON that
+    // threshold and flips every single frame: stop, step, stop, step. Now we only pause when it has
+    // genuinely dropped behind, and do not set off again until it has actually caught up.
+    private const float HoundLagDistance = 12.0f;   // pause + re-beckon once the hound is this far back
+    // ...and resume once it is back inside this. Deliberately the OLD single threshold: the band
+    // only has to be wide enough to stop the flapping, and picking a tighter resume point would
+    // risk a hound whose own follow distance settles between the two -- which would hold us
+    // forever. This way the resume point is exactly where it always was, so it can only improve.
+    private const float HoundCatchUp = 8.0f;
+    // Belt and braces on that: never hold for the hound longer than this. If it settles outside
+    // HoundCatchUp (or gets stuck on terrain) we walk on and keep beckoning rather than deadlocking
+    // the leve into its 300s timeout.
+    private const long HoundWaitMaxMs = 8000;
     private const long BeckonThrottleMs = 3500;     // min gap between /beckon while it is keeping up
+    // Look-ahead: walk to the FURTHEST authored waypoint within this radius rather than the very
+    // next one, so a dozen-point route is covered in a few long legs instead of a dozen short hops.
+    // Bounded (not "just head for the last point") because the waypoints exist to keep the walk in
+    // the corridor the route was captured along.
+    private const float EscortLookahead = 40.0f;
+    // How far ahead the overshoot test may look when deciding a waypoint is behind us. Kept local
+    // so a route that doubles back near itself cannot make us skip the whole middle of it.
+    private const int EscortSkipWindow = 3;
 
     private uint _leveId;
     private Phase _phase = Phase.Terminal;
@@ -152,6 +182,17 @@ internal sealed unsafe class LeveRunner
     private long _beckonThrottle;
     private bool _resumeBeckon;   // hound stops while we fight; force a beckon on the next escort tick
     private bool _warnedNoHound;
+    private bool _waitingForHound; // inside the lag hysteresis: holding until it closes the gap
+    private long _houndWaitSince;  // when that hold started (bounded by HoundWaitMaxMs)
+    // NavmeshIpc.Stop() is NOT edge-triggered -- it fires the IPC and drops the cached destination
+    // on every call -- so calling it per tick both spams vnav and forces a full re-path the moment
+    // we move again. This latch makes the escort's stops one-shot.
+    private bool _escortStopped;
+    private int _escortGoalIndex = -1; // the waypoint we are currently walking to (for the leg beckon)
+    private bool _anchorSnapped;   // the leve anchor has been resolved onto the walkable floor
+    private float _travelBest;     // closest we have got to it, and when (travel stall guard)
+    private long _travelProgressAt;
+    private long _lastTravelResnap;
     private ulong _engagedLeveId; // the leve objective mob we last re-armed RSR + marked (fire once per mob)
     private long _lastParchmentRead; // when we last read a Necrologos page (throttles the next read)
 
@@ -179,6 +220,14 @@ internal sealed unsafe class LeveRunner
         _beckonThrottle = 0;
         _resumeBeckon = false;
         _warnedNoHound = false;
+        _anchorSnapped = false;
+        _travelBest = float.MaxValue;
+        _travelProgressAt = 0;
+        _lastTravelResnap = 0;
+        _waitingForHound = false;
+        _houndWaitSince = 0;
+        _escortStopped = false;
+        _escortGoalIndex = -1;
         _engagedLeveId = 0;
         _engagingLeve = false;
         _defendArmedId = 0;
@@ -292,12 +341,16 @@ internal sealed unsafe class LeveRunner
                 // Anchor position: an authored override for leves whose sheet LevelStart resolves under
                 // the walkable floor (the dismount then lands underground and shuttles back and forth),
                 // else the sheet's LevelStart -> Level position.
-                if ((Data.LeveStartOverrides.ForLeveName(leveName) ?? Sheets.LeveStartPosition(_leveId)) is not { } pos)
+                var authored = Data.LeveStartOverrides.ForLeveName(leveName);
+                if ((authored ?? Sheets.LeveStartPosition(_leveId)) is not { } pos)
                 {
                     DebugLog.Warn($"Leve {_leveId}: no objective position; skipping");
                     return Finish(ctx);
                 }
                 _pos = pos;
+                // An authored override is a captured, confirmed-good standing position, so it is taken
+                // as-is. A sheet position is not: see EnsureAnchorSnapped.
+                _anchorSnapped = authored != null;
                 // Escort leves (guide an NPC, not clear a spawn) run a different objective
                 // loop; matched by the leve's name against the authored route table.
                 _escort = Data.EscortLevePaths.ForLeveName(leveName);
@@ -327,6 +380,10 @@ internal sealed unsafe class LeveRunner
                 break;
 
             case Phase.Travel:
+                // Before the early exit below, not after: a leve that is already under way skips
+                // straight to Fight, which lands and holds at this same anchor.
+                EnsureAnchorSnapped(ctx);
+
                 // If it somehow already started, go straight to combat.
                 if (Plugin.Condition[ConditionFlag.BoundByDuty])
                 {
@@ -339,12 +396,33 @@ internal sealed unsafe class LeveRunner
                 if (travel <= ArriveRange)
                 {
                     ctx.Navmesh.Stop();
+                    _travelBest = float.MaxValue;
+                    _travelProgressAt = 0;
                     _phase = Phase.Initiate;
                 }
                 else
                 {
+                    // Self-defense on the way in, the same guard RunFight / RunItemLure /
+                    // RunDestination / RunProtection / RunEscort all take. Travel was the one phase
+                    // without it, and it is the phase that covers the most ground: an ambient
+                    // hostile picked up en route was fought by every other phase and ignored here,
+                    // so the runner rode on with the mob attached and arrived at the anchor with it.
+                    // Freeze the stall anchor while defending, or a fight reads as "no travel
+                    // progress" and forces a pointless re-snap and re-path.
+                    if (Combat.CombatAssist.DefendSelf(ctx, ref _defendArmedId))
+                    {
+                        _travelProgressAt = Environment.TickCount64;
+                        break;
+                    }
+                    WatchTravelStall(ctx, travel);
                     Combat.Mount.EnsureMounted(ctx, travel);
-                    ctx.Navmesh.MoveCloseTo(_pos, Flight.Allowed(ctx), ArriveRange - 1.0f);
+                    // Flight.ShouldFly, NOT the bare Flight.Allowed this used to pass. Allowed is only
+                    // the zone/config gate: on a short hop -- where EnsureMounted deliberately does not
+                    // mount at all -- it handed a still-grounded character a 3D flight path, which vnav
+                    // cannot follow, so it stalls short and shuffles. ShouldFly additionally requires
+                    // being airborne already, or mounted with a leg long enough to be worth taking off
+                    // for, which is the rule every other travel site in the plugin uses.
+                    ctx.Navmesh.MoveCloseTo(_pos, Flight.ShouldFly(ctx, travel), ArriveRange - 1.0f);
                 }
                 break;
 
@@ -381,6 +459,10 @@ internal sealed unsafe class LeveRunner
                 // Stop navigation and wait -- the top-of-Tick ConfirmYes still accepts the TP prompt,
                 // and completion is caught above once the leve leaves the accepted list, or by
                 // StartLeveExecutor's IsLeveComplete(slot) check.
+                // The zone mesh may only have finished building after the travel phase handed over,
+                // so give the anchor another chance to resolve before we land and hold on it.
+                EnsureAnchorSnapped(ctx);
+
                 if (!Plugin.Condition[ConditionFlag.BoundByDuty])
                 {
                     ctx.Navmesh.Stop();
@@ -869,10 +951,33 @@ internal sealed unsafe class LeveRunner
         else
         {
             _warnedNoHound = false;
-            if (Vector3.Distance(me, hound.Position) > HoundLagDistance)
+            var gap = Vector3.Distance(me, hound.Position);
+            // Two bands, not one threshold -- see HoundLagDistance. Crossing the far one starts the
+            // wait; only crossing the near one ends it, so a hound trailing at walking pace cannot
+            // flip us between moving and stopped every frame.
+            if (gap > HoundLagDistance)
             {
-                // Falling behind: stop, beckon, and wait for it to close the gap.
-                ctx.Navmesh.Stop();
+                if (!_waitingForHound)
+                    _houndWaitSince = Environment.TickCount64;
+                _waitingForHound = true;
+            }
+            else if (gap <= HoundCatchUp)
+            {
+                _waitingForHound = false;
+            }
+
+            // Give up on waiting rather than deadlocking on a hound that will not close the gap.
+            if (_waitingForHound && Environment.TickCount64 - _houndWaitSince > HoundWaitMaxMs)
+            {
+                _waitingForHound = false;
+                DebugLog.Verbose($"Escort: '{route.EscortNpcName}' still {gap:0}y back after " +
+                    $"{HoundWaitMaxMs / 1000}s; walking on and beckoning rather than holding.");
+            }
+
+            if (_waitingForHound)
+            {
+                // Genuinely behind: stop ONCE, beckon, and wait for it to close the gap.
+                StopEscort(ctx);
                 Beckon(ctx, hound, force: _resumeBeckon);
                 _resumeBeckon = false;
                 return;
@@ -884,21 +989,138 @@ internal sealed unsafe class LeveRunner
         }
 
         // Walk the authored route on foot (mounting would outrun the hound).
+        //
+        // Advance past EVERY waypoint already behind us, not one per tick, and NEVER stop to do it.
+        // Halting at each point is the other half of the reported jank: a twelve-point route meant
+        // twelve full stop/re-path cycles, one per point, each costing a frame of standing still.
+        while (_wpIndex < route.Waypoints.Count && Reached(me, route, _wpIndex))
+            _wpIndex++;
+
         if (_wpIndex >= route.Waypoints.Count)
         {
             // At the final point: hold and keep beckoning until the leve completes.
-            ctx.Navmesh.Stop();
+            StopEscort(ctx);
             return;
         }
 
-        var wp = route.Waypoints[_wpIndex];
-        if (Vector3.Distance(me, wp) <= EscortArrive)
+        // Head for the FURTHEST waypoint still inside the look-ahead radius rather than the very
+        // next one, so the route is covered in a few long legs. vnav paths around the terrain
+        // itself; the waypoints only keep us in the captured corridor, which the bounded radius
+        // preserves.
+        var goalIndex = _wpIndex;
+        for (var i = _wpIndex + 1; i < route.Waypoints.Count; i++)
         {
-            _wpIndex++;
-            ctx.Navmesh.Stop();
+            if (Vector3.Distance(me, route.Waypoints[i]) > EscortLookahead)
+                break;
+            goalIndex = i;
+        }
+
+        // Starting a new leg: pull the hound along with it rather than waiting out the throttle.
+        if (goalIndex != _escortGoalIndex)
+        {
+            _escortGoalIndex = goalIndex;
+            if (hound != null)
+                Beckon(ctx, hound, force: true);
+        }
+
+        _escortStopped = false;
+        ctx.Navmesh.MoveCloseTo(route.Waypoints[goalIndex], false, EscortArrive - 1.0f);
+    }
+
+    // True when waypoint i is behind us: either we are standing on it, or -- because the look-ahead
+    // above can walk us straight past an intermediate point without ever coming within EscortArrive
+    // of it -- a waypoint a little further along the route is now closer than it is. Without the
+    // second test the index would stick on a point we already passed and the route would never
+    // finish. The scan is bounded to EscortSkipWindow so a route that doubles back near itself
+    // cannot make us skip its whole middle.
+    private static bool Reached(Vector3 me, Data.EscortLevePaths.EscortRoute route, int i)
+    {
+        var d = Vector3.Distance(me, route.Waypoints[i]);
+        if (d <= EscortArrive)
+            return true;
+        var last = Math.Min(route.Waypoints.Count - 1, i + EscortSkipWindow);
+        for (var j = i + 1; j <= last; j++)
+            if (Vector3.Distance(me, route.Waypoints[j]) < d)
+                return true;
+        return false;
+    }
+
+    // Stop moving ONCE. NavmeshIpc.Stop() fires the IPC and clears its cached destination on every
+    // call, so a per-tick stop both spams vnav and guarantees a full re-path on the next move --
+    // which is what a stop/go oscillation turns into on screen.
+    private void StopEscort(ExecutionContext ctx)
+    {
+        if (_escortStopped)
+            return;
+        _escortStopped = true;
+        _escortGoalIndex = -1; // the next move is a fresh leg, so it re-beckons
+        ctx.Navmesh.Stop();
+    }
+
+    // Resolve the leve anchor onto real walkable ground, once the zone navmesh can answer.
+    //
+    // The sheet's Leve.LevelStart -> Level position carries a real Y, and it is regularly a few
+    // yalms UNDER the floor. The character then paths at a point it can never stand on: the arrive
+    // test never passes, the move is re-issued forever, and the land/dismount probe (which searches
+    // DOWNWARD) snaps to an underground poly -- the reported "too low to the ground, jitters out and
+    // goes crazy". Until now the only cure was an authored per-leve override, which fixes exactly
+    // the leves someone has already hit and no others.
+    //
+    // PROBING FROM ABOVE IS THE WHOLE TRICK. vnavmesh's FindPointOnFloor keeps only floor polygons
+    // at or below the probe height and returns the highest, so probing AT the sheet Y finds whatever
+    // lies under the ground and misses the real floor above it -- which is why the existing
+    // downward-searching land probe could never repair this on its own. Probing from a little above
+    // returns the ground the character actually stands on.
+    //
+    // Only ever LIFTS: the snapped point is taken solely when it comes back above the sheet point,
+    // which is precisely the "anchor is buried" case. A sheet position already on (or above) the
+    // ground is left exactly as it was, so leves that work today cannot regress. The probe box is
+    // kept small so it reads the column at the leve start rather than wandering onto neighbouring
+    // terrain.
+    private void EnsureAnchorSnapped(ExecutionContext ctx)
+    {
+        if (_anchorSnapped)
+            return;
+        // The mesh cannot answer until it is built; keep the raw anchor and retry next tick.
+        if (!ctx.Navmesh.IsReady())
+            return;
+        _anchorSnapped = true;
+
+        var probe = new Vector3(_pos.X, _pos.Y + AnchorProbeUp, _pos.Z);
+        if (ctx.Navmesh.PointOnFloor(probe, false, AnchorProbeExtent) is not { } floor)
+            return;
+        if (floor.Y <= _pos.Y + AnchorLiftMin)
+            return; // already on or above the ground; nothing to correct
+
+        DebugLog.Info($"Leve {_leveId}: the sheet objective position sits {floor.Y - _pos.Y:0.0}y below the " +
+            "walkable floor; using the floor above it instead.");
+        _pos = floor;
+    }
+
+    // Travel stall guard. With a buried or unreachable anchor the arrive test can never pass, so the
+    // travel phase re-issues the same move indefinitely. If we stop getting closer, re-snap the
+    // anchor and force a genuine re-path (Stop first: MoveCloseTo is deduplicated, so without
+    // dropping the cached destination it would keep following the same dead path). The leve's own
+    // 300s timeout remains the final backstop.
+    private void WatchTravelStall(ExecutionContext ctx, float travel)
+    {
+        var now = Environment.TickCount64;
+        if (_travelProgressAt == 0 || travel < _travelBest - TravelProgress)
+        {
+            _travelBest = travel;
+            _travelProgressAt = now;
             return;
         }
-        ctx.Navmesh.MoveCloseTo(wp, false, EscortArrive - 1.0f);
+        if (now - _travelProgressAt < TravelStallMs || now - _lastTravelResnap < TravelStallMs)
+            return;
+
+        _lastTravelResnap = now;
+        _travelProgressAt = now;
+        DebugLog.Warn($"Leve {_leveId}: no travel progress for {TravelStallMs / 1000}s at {travel:0}y from the " +
+            "objective; re-resolving the position and re-pathing.");
+        _anchorSnapped = false;
+        EnsureAnchorSnapped(ctx);
+        ctx.Navmesh.Stop();
     }
 
     // Target the escort NPC and perform the /beckon emote so it follows. Throttled unless
