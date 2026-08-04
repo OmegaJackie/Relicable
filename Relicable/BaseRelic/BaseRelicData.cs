@@ -361,7 +361,9 @@ public static class BaseRelicData
                 Job = RelicJob.Paladin,
                 RelicWeaponName = "Curtana", SecondaryRewardName = "Holy Shield",
                 ClassWeaponName = "Aeolian Scimitar",
-                BrokenWeapon = new MapStop("Zahar'ak", SouthernThanalan, 30f, 19f),
+                BrokenWeapon = new MapStop("Zahar'ak", SouthernThanalan, 31.2f, 18.2f),
+                BrokenWeaponCoffer = new QuestCoffer(2002492, "Treasure Coffer", SouthernThanalan,
+                    483.864f, 9.280f, -162.980f),
                 Materia = Meld("Battledance Materia III"),
                 CraftMaterials = new[]
                 {
@@ -382,7 +384,9 @@ public static class BaseRelicData
                 Job = RelicJob.Warrior,
                 RelicWeaponName = "Bravura",
                 ClassWeaponName = "Barbarian's Bardiche",
-                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 23f, 10f),
+                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 24.7f, 7.6f),
+                BrokenWeaponCoffer = new QuestCoffer(2002491, "Treasure Coffer", OuterLaNoscea,
+                    160.072f, 22.767f, -694.006f),
                 Materia = Meld("Battledance Materia III"),
                 CraftMaterials = new[]
                 {
@@ -403,7 +407,9 @@ public static class BaseRelicData
                 Job = RelicJob.Dragoon,
                 RelicWeaponName = "Gae Bolg",
                 ClassWeaponName = "Champion's Lance",
-                BrokenWeapon = new MapStop("Natalan", CoerthasCentralHighlands, 34f, 21f),
+                BrokenWeapon = new MapStop("Natalan", CoerthasCentralHighlands, 34.2f, 24.3f),
+                BrokenWeaponCoffer = new QuestCoffer(2002494, "Treasure Coffer", CoerthasCentralHighlands,
+                    638.219f, 286.442f, 140.518f),
                 Materia = Meld("Savage Aim Materia III"),
                 CraftMaterials = new[]
                 {
@@ -426,7 +432,9 @@ public static class BaseRelicData
                 Job = RelicJob.Monk,
                 RelicWeaponName = "Sphairai",
                 ClassWeaponName = "Wildling's Cesti",
-                BrokenWeapon = new MapStop("Zahar'ak", SouthernThanalan, 32f, 18f),
+                BrokenWeapon = new MapStop("Zahar'ak", SouthernThanalan, 32.6f, 18f),
+                BrokenWeaponCoffer = new QuestCoffer(2002493, "Treasure Coffer", SouthernThanalan,
+                    553.699f, 7.600f, -172.166f),
                 Materia = Meld("Savage Aim Materia III"),
                 CraftMaterials = new[]
                 {
@@ -446,7 +454,11 @@ public static class BaseRelicData
                 Job = RelicJob.Ninja,
                 RelicWeaponName = "Yoshimitsu",
                 ClassWeaponName = "Vamper's Knives",
-                BrokenWeapon = new MapStop("Sapsa Spawning Grounds", WesternLaNoscea, 16f, 17f),
+                // Ninja's Yoshimitsu is the one relic whose part-1 object is NOT a "Treasure Coffer"
+                // (EObjName 2003951 reads "Banded Chest"), which is why the object name is per-job.
+                BrokenWeapon = new MapStop("Sapsa Spawning Grounds", WesternLaNoscea, 12.8f, 15.3f),
+                BrokenWeaponCoffer = new QuestCoffer(2003951, "Banded Chest", WesternLaNoscea,
+                    -433.556f, -31.493f, -307.161f),
                 Materia = Meld("Heavens' Eye Materia III"),
                 CraftMaterials = new[]
                 {
@@ -470,6 +482,11 @@ public static class BaseRelicData
                 RelicWeaponName = "Artemis Bow",
                 ClassWeaponName = "Longarm's Composite Bow",
                 BrokenWeapon = new MapStop("Natalan", CoerthasCentralHighlands, 35.4f, 22.2f),
+                // The reference row: identical to the hand-authored, live-run Bard quest path
+                // (Data/questpaths/1125, sequence 1), which is what validates the derivation for
+                // the other nine jobs.
+                BrokenWeaponCoffer = new QuestCoffer(2002497, "Treasure Coffer", CoerthasCentralHighlands,
+                    697.691f, 287.493f, 38.492f),
                 Materia = Meld("Heavens' Eye Materia III"),
                 CraftMaterials = new[]
                 {
@@ -492,7 +509,9 @@ public static class BaseRelicData
                 Job = RelicJob.BlackMage,
                 RelicWeaponName = "Stardust Rod",
                 ClassWeaponName = "Sanguine Scepter",
-                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 23f, 10f),
+                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 26f, 8.5f),
+                BrokenWeaponCoffer = new QuestCoffer(2002495, "Treasure Coffer", OuterLaNoscea,
+                    224.967f, 24.131f, -651.320f),
                 Materia = Meld("Savage Might Materia III"),
                 CraftMaterials = new[]
                 {
@@ -512,7 +531,13 @@ public static class BaseRelicData
                 Job = RelicJob.Summoner,
                 RelicWeaponName = "The Veil of Wiyu",
                 ClassWeaponName = "Erudite's Picatrix of Casting",
-                BrokenWeapon = new MapStop("Sylphlands", EastShroud, 25f, 19f),
+                // CORRECTED. The transcribed (25.0, 19.0) was 181 yalms from the real coffer -- the
+                // single worst anchor in the table, and well outside InteractObjectExecutor's 100y
+                // SearchRadius, so the run flew to open ground in the Sylphlands, never streamed the
+                // coffer in, and timed out without opening anything. Reported live on Summoner.
+                BrokenWeapon = new MapStop("Sylphlands", EastShroud, 23.8f, 15.6f),
+                BrokenWeaponCoffer = new QuestCoffer(2002498, "Treasure Coffer", EastShroud,
+                    116.073f, -21.432f, -294.892f),
                 Materia = Meld("Savage Might Materia III"),
                 CraftMaterials = new[]
                 {
@@ -536,7 +561,9 @@ public static class BaseRelicData
                 Job = RelicJob.WhiteMage,
                 RelicWeaponName = "Thyrus",
                 ClassWeaponName = "Madman's Whispering Rod",
-                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 24.3f, 6.4f),
+                BrokenWeapon = new MapStop("U'Ghamaro Mines", OuterLaNoscea, 24.5f, 6.4f),
+                BrokenWeaponCoffer = new QuestCoffer(2002496, "Treasure Coffer", OuterLaNoscea,
+                    149.995f, 25.342f, -755.587f),
                 Materia = Meld("Quicktongue Materia III"),
                 CraftMaterials = new[]
                 {
@@ -559,7 +586,9 @@ public static class BaseRelicData
                 Job = RelicJob.Scholar,
                 RelicWeaponName = "Omnilex",
                 ClassWeaponName = "Erudite's Picatrix of Healing",
-                BrokenWeapon = new MapStop("Sapsa Spawning Grounds", WesternLaNoscea, 16f, 17f),
+                BrokenWeapon = new MapStop("Sapsa Spawning Grounds", WesternLaNoscea, 15.1f, 15.9f),
+                BrokenWeaponCoffer = new QuestCoffer(2002499, "Treasure Coffer", WesternLaNoscea,
+                    -319.167f, -36.627f, -278.727f),
                 Materia = Meld("Quicktongue Materia III"),
                 CraftMaterials = new[]
                 {

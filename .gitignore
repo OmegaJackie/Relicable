@@ -81,6 +81,9 @@ venv/
 env/
 .pytest_cache/
 .mypy_cache/
+# Per-item HTTP cache for gen_mob_drops.py (thousands of small files; the generated
+# catalogue in Relicable/Data/catalogs IS committed, its raw source responses are not).
+tools/.cache/
 
 # ---------------------------------------------------------------------------
 # Local agent / editor state

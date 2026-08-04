@@ -98,6 +98,23 @@ public sealed class StepData
     // window where the weapon is deliberately off.
     public bool UnequipRelicFirst { get; set; }
 
+    // InteractNpc: this step is a base-relic QUEST TURN-IN that must move the relic quest past this
+    // sequence. 0 = not a turn-in (a plain conversation), which is the default and leaves the old
+    // behaviour untouched.
+    //
+    // Without it, the executor's only completion evidence is "the conversation ended" -- and a
+    // conversation ends whether or not the hand-over actually happened. A turn-in that did not take
+    // (the item was not in the bags, the delivery window was never driven, TextAdvance was not
+    // carrying it) therefore reported Complete, the controller stamped the objective into its
+    // in-session ran-markers, and from then on the ONLY step that could advance the quest was
+    // excluded from selection -- so the run stopped and told the player to go report to Gerolt by
+    // hand. Reported live as "it turns in the quest but doesn't actually get credit".
+    //
+    // The codebase already has the right shape for this: UpgradeRelicExecutor refuses to call a
+    // conversation successful unless the relic item actually changed. This is the same rule for
+    // quest turn-ins, with the live quest sequence as the witness.
+    public int AdvancesQuestFromSequence { get; set; }
+
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public InteractionType Interaction { get; set; }
 

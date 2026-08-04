@@ -157,6 +157,17 @@ public sealed class MainWindow : Window
         DrawLightTracker();
         DrawMahatmaTracker();
 
+        // A run that halted because YOU have something to do shows why, right here. Without this the
+        // objective panel below is simply absent and the explanation is buried in a debug log most
+        // players never open -- "it stops and shows nothing" was indistinguishable from a broken run.
+        if (_controller.StopReason.Length > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(Yellow, "Next step (Relicable is stopped):");
+            Ui.Wrapped(Yellow, _controller.StopReason);
+            ImGui.Spacing();
+        }
+
         var obj = _controller.ActiveObjective;
         if (obj != null)
         {
@@ -168,10 +179,11 @@ public sealed class MainWindow : Window
             // objectives flag their authored spot on the map and travel there instead.
             var isBookObjective = obj.Completion.Kind is CompletionKind.MonsterSlot
                 or CompletionKind.DungeonSlot or CompletionKind.FateSlot or CompletionKind.LeveSlot;
-            // The three Jalzahn enhancements (Zenith->Atma, Atma->Animus, Novus->Nexus) are done at
-            // one NPC; clicking flags him, teleports to Fallgourd Float, and flies there.
+            // The four Jalzahn enhancements (Zenith->Atma, Atma->Animus, Animus->Novus, Novus->Nexus)
+            // are done at one NPC; clicking flags him, teleports to Fallgourd Float, and flies there.
             var isJalzahnUpgrade = obj.Completion.Kind is CompletionKind.AtmaUpgraded
-                or CompletionKind.AnimusUpgraded or CompletionKind.NexusUpgraded;
+                or CompletionKind.AnimusUpgraded or CompletionKind.NovusUpgraded
+                or CompletionKind.NexusUpgraded;
             // Any other objective that carries a zone AND an authored world spot (today only the
             // base-relic beastmen hunt): clicking drops the in-game map flag there and travels to
             // it -- the same flag + teleport + fly the Jalzahn line uses. Null (no zone or no
@@ -728,6 +740,30 @@ public sealed class MainWindow : Window
                 ImGui.TextColored(Grey,
                     $"Zenith enhancement at Jalzahn (Hyrstmill): {GameState.AtmaCollectedCount()}/12 atmas + the equipped Zenith weapon.");
                 Done(GameState.EquippedRelicStage() >= RelicStage.Atma);
+                break;
+            case CompletionKind.SphereScrollFull:
+            {
+                // The scroll's own infused counter (recorded whenever its window is open), which is
+                // also what decides when the run moves on to the enhancement at Jalzahn.
+                var (infused, cap) = Novus.NovusScrollState.Progress(_config);
+                if (cap > 0 && infused > 0)
+                    Bar(infused, cap, "infused");
+                else
+                    ImGui.TextColored(Grey, "Open the Sphere Scroll's window once so its infused count can be read.");
+                break;
+            }
+            case CompletionKind.BravesMaterialsFetched:
+                // Deliberately static text: the live answer means recomputing the whole Braves plan,
+                // and this runs every frame the window is open.
+                ImGui.TextColored(Grey, "Driving a summoning bell to pull the quest materials your retainers hold.");
+                break;
+            case CompletionKind.BravesQuestAccepted:
+                Done(Steps.BravesAcceptExecutor.IsInHand(obj.BravesQuest));
+                break;
+            case CompletionKind.NovusUpgraded:
+                ImGui.TextColored(Grey,
+                    "Animus enhancement at Jalzahn (Hyrstmill): the filled Sphere Scroll + the unequipped Animus weapon.");
+                Done(GameState.EquippedRelicStage() >= RelicStage.Novus);
                 break;
             case CompletionKind.NexusUpgraded:
                 Done(GameState.EquippedRelicStage() >= RelicStage.Nexus);

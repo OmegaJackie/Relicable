@@ -263,6 +263,15 @@ public sealed class Configuration : IPluginConfiguration
     // to reconcile them live). The route continues each stat from its current grade and skips maxed stats.
     public System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<MateriaType, int>> ScrollProgressByScroll { get; set; } = new();
 
+    // The scroll's AUTHORITATIVE infused total (AtkValue 10 of the open RelicSphereScroll window),
+    // keyed by the scroll's spec name, as a "current/max" pair. Distinct from ScrollProgressByScroll:
+    // that is the per-stat block, which is only trusted when it reconciles with this counter and is
+    // WIPED when a scroll finishes. This is what answers "is the scroll at 75/75", and it must survive
+    // the window closing -- it is the signal that sends the run to Jalzahn for the Animus -> Novus
+    // enhancement. Recorded whenever the window is visible (NovusScrollState.Observe), so a scroll
+    // melded by hand counts; a fresh scroll overwrites it with its own live 0/75.
+    public System.Collections.Generic.Dictionary<string, ScrollInfusion> ScrollInfusedByScroll { get; set; } = new();
+
     // Target number of Alexandrite to farm for the Novus stage. The treasure-map farm
     // runs until you hold this many, and the farm objective re-arms whenever you hold
     // fewer (so you can raise it to farm more). 75 is the amount one Sphere Scroll
@@ -404,6 +413,25 @@ public sealed class Configuration : IPluginConfiguration
     public bool PauseIfTargetedByPlayer { get; set; }
     public bool PauseOnTell { get; set; }
 
+    // ---- How many relics to build ----
+    //
+    // A stage is finished when you HOLD its end item, and a finished stage's quests are never taken
+    // again. That test exists because the stage's own quests cannot answer the question: the four
+    // Braves material quests are repeatable, so a completed one's sequence returns to 0 and reads
+    // exactly like "never accepted" -- which is why the run kept re-accepting 'A Ponze of Flesh' the
+    // moment it finished it. The materials cannot answer it either; they are consumed at turn-in.
+    //
+    // Default 1: build one relic, then stop offering to build it again. Raise this to keep going for
+    // another weapon (a second job's line, or a second copy), and the stage re-opens until you hold
+    // that many. See GameState.HeldRelicCountAtOrAbove.
+    public int RelicTargetCount { get; set; } = 1;
+
+    // The escape hatch: ignore the held-weapon count entirely and always offer stage work. For
+    // deliberately re-running a stage on a weapon you already own -- and for the case the count
+    // cannot see, e.g. a finished weapon parked in a retainer or the glamour dresser rather than in
+    // your bags or armoury. Off by default; with it on, nothing stops a completed stage repeating.
+    public bool RepeatCompletedStages { get; set; }
+
     // ---- Auto-discard (see Steps/AutoDiscard.cs) ----
     //
     // Discarding is PERMANENT and deliberately silent -- no confirmation is shown, which is the
@@ -411,13 +439,17 @@ public sealed class Configuration : IPluginConfiguration
     // toggle is off by default and every gate below is on the cautious side.
     public bool AutoDiscardDrops { get; set; }
 
+    // BOTH modes are gated on Data.MobDropCatalog first: an item that is not known to drop from
+    // an enemy is never discarded, whichever mode is selected and whatever is on the lists below.
     public enum DiscardMode
     {
-        // Only the ids in DiscardItemIds. Predictable; nothing is deleted that was not named.
+        // Only the ids in DiscardItemIds (that are also enemy drops). Predictable; nothing is
+        // deleted that was not named.
         ListOnly,
-        // Rule-driven: common (white), stackable, non-usable, non-equippable, tradeable materials
-        // whose vendor price is at or under AutoDiscardMaxVendorPrice -- i.e. ordinary mob-drop
-        // clutter. Every relic material the plugin knows about is protected regardless.
+        // Rule-driven: enemy drops that are also common (white), stackable, non-usable,
+        // non-equippable, tradeable, and vendor at or under AutoDiscardMaxVendorPrice -- i.e.
+        // ordinary mob-drop clutter. Every relic material the plugin knows about is protected
+        // regardless.
         LowValueMaterials,
     }
 

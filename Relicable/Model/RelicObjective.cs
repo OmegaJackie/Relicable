@@ -20,11 +20,25 @@ public enum CompletionKind
     LightGauge,     // Nexus light >= 2000, read from the equipped relic (GameState.IsLightGaugeFull)
     AtmaUpgraded,   // the Zenith -> Atma enhancement is done: the equipped weapon has reached the Atma tier
     AnimusUpgraded, // the Atma -> Animus enhancement is done: the equipped weapon has reached the Animus tier
+    // The Sphere Scroll is at its cap (75/75; Paladin's Curtana 53 + Holy Shield 22 both full), read
+    // from the game's own infused counter recorded by NovusScrollState -- so a scroll melded by hand
+    // counts, not only one the engine melded. This is what ends the melding work and lets the run go
+    // to Jalzahn for the Novus enhancement.
+    SphereScrollFull,
+    NovusUpgraded,  // the Animus -> Novus enhancement is done: the equipped weapon has reached the Novus tier
     NexusUpgraded,  // the Novus -> Nexus upgrade is done: the equipped weapon has reached the Nexus tier
     ZenithTraded,   // the Furnace trade is done: the weapon in the hands is a "<base> Zenith" form. Read off
                     // the EQUIPPED weapon, not "no bare relic held", so an alt job's parked base relic in the
                     // armoury neither blocks it nor completes it early while the traded weapon sits unequipped
     MahatmaGauge,   // Zeta: all 12 Mahatma awakened on the equipped Braves weapon (GameState.IsZetaFarmComplete)
+    // A Braves stage quest (RelicObjective.BravesQuest) is in hand: accepted, or -- for the one-time
+    // umbrella quest only -- completed. The four material quests are repeatable, so "completed" must
+    // NOT count for them; see BravesAcceptExecutor.IsInHand.
+    BravesQuestAccepted,
+    // No Braves quest material is both short in the bags and sitting on a retainer, so there is
+    // nothing left for the auto-fetch to pull. Read live from the planner, so it re-arms by itself if
+    // more materials are entrusted later, and it is never "done" in a way that survives being wrong.
+    BravesMaterialsFetched,
     RelicNoteAdvanced, // Animus book auto-advance: the active RelicNote is no longer the finished Book (a new book was bought; a repeat relic WRAPS from the last book back to book 1, so "different", not "greater")
     AllStepsDone,   // objective is purely procedural
 }

@@ -75,6 +75,31 @@ public sealed class ConfigWindow : Window
 
     private void DrawSettings()
     {
+        ImGui.TextDisabled("How many relics");
+
+        var relicTarget = _config.RelicTargetCount;
+        if (ImGui.InputInt("Relics to build", ref relicTarget))
+        {
+            _config.RelicTargetCount = relicTarget < 1 ? 1 : relicTarget;
+            _dirty = true;
+        }
+        Ui.Tooltip("A stage is finished when you HOLD its end item, and a finished stage's quests are " +
+            "never taken again.\n\n" +
+            "This has to be judged on the weapon, not the quests: the four Braves material quests are " +
+            "repeatable, so a completed one reads exactly like one you never took — which is why the " +
+            "run used to re-accept 'A Ponze of Flesh' the moment it finished it.\n\n" +
+            "Leave at 1 for a single relic. Raise it to build another (a second job's line, or a " +
+            "second copy) and the stage re-opens until you hold that many.");
+
+        Checkbox("Repeat completed stages", _config.RepeatCompletedStages,
+            v => _config.RepeatCompletedStages = v);
+        Ui.Tooltip("Ignore the count above and always offer stage work.\n\n" +
+            "Use this to deliberately re-run a stage on a weapon you already own, or if a finished " +
+            "weapon is somewhere the count cannot see it — a retainer or the glamour dresser rather " +
+            "than your bags or armoury.\n\n" +
+            "With this on, nothing stops a completed stage from repeating.");
+
+        ImGui.Separator();
         ImGui.TextDisabled("Atma farm");
         var atmaBackend = (int)_config.AtmaBackend;
         if (ImGui.Combo("Atma backend", ref atmaBackend, "Built-in\0CBT Fate Tool Kit\0"))
@@ -534,6 +559,8 @@ public sealed class ConfigWindow : Window
         });
         Ui.Tooltip("Delete drop clutter from your bags as it accumulates, so a long unattended run " +
             "does not stop looting on a full inventory.\n\n" +
+            "Only items known to drop from an enemy are ever eligible. Anything crafted, gathered, " +
+            "fished, bought, desynthed or unrecognised is left alone no matter how it is configured.\n\n" +
             "There is no confirmation window and nothing to answer — items go immediately and " +
             "permanently. The table below shows exactly what would go right now.");
 
@@ -543,8 +570,21 @@ public sealed class ConfigWindow : Window
             return;
         }
 
+        // A missing or unreadable catalogue disables the feature outright. Say so here rather than
+        // letting it look like the rules simply found nothing to do.
+        var known = Data.MobDropCatalog.Count;
+        if (known == 0)
+        {
+            Ui.Wrapped(Red, "The enemy-drop catalogue (Data/catalogs/mob_drop_items.json) could not be " +
+                "loaded, so nothing will be discarded. Reinstall the plugin, or regenerate it with " +
+                "tools/gen_mob_drops.py.");
+            return;
+        }
+
         Ui.Wrapped(Red, "Discarded items are gone permanently — there is no confirmation and no way to get them back. " +
             "Check the table below before leaving a long run unattended.");
+        Ui.Wrapped(Grey, $"Eligible items are limited to the {known} known enemy drops; everything else in " +
+            "your bags is protected regardless of the settings below.");
 
         var mode = (int)_config.AutoDiscardMode;
         if (ImGui.Combo("What to discard", ref mode, "Only my discard list\0All low-value materials\0"))
@@ -554,11 +594,13 @@ public sealed class ConfigWindow : Window
             _bagPreviewAt = 0;
             _dirty = true;
         }
-        Ui.Tooltip("'Only my discard list' deletes nothing except the items you tick below — predictable, " +
+        Ui.Tooltip("Both settings only ever act on items known to drop from an enemy.\n\n" +
+            "'Only my discard list' deletes nothing except the items you tick below — predictable, " +
             "but you have to seed it once.\n\n" +
-            "'All low-value materials' is the hands-off setting: ordinary white, stackable, non-usable " +
-            "crafting materials worth at most the vendor price below. Gear, anything usable, HQ, " +
-            "collectables, materia and every relic material are excluded no matter what.");
+            "'All low-value materials' is the hands-off setting: enemy drops that are also ordinary " +
+            "white, stackable, non-usable materials worth at most the vendor price below. Gear, " +
+            "anything usable, HQ, collectables, materia and every relic material are excluded no " +
+            "matter what.");
 
         Checkbox("Only while automation is running", _config.AutoDiscardOnlyWhileRunning,
             v => _config.AutoDiscardOnlyWhileRunning = v);
@@ -605,7 +647,9 @@ public sealed class ConfigWindow : Window
             return;
 
         Ui.Note("'Keep' never deletes that item again. 'Discard' always deletes it, even in list-only mode. " +
-            "Protected rows are ones the rules refuse to touch (gear, usable items, HQ, materia, relic materials).");
+            "Protected rows are ones the rules refuse to touch — most often because the item is not a " +
+            "known enemy drop (crafted, gathered, bought, desynthed), and also gear, usable items, HQ, " +
+            "materia and relic materials. Protected items cannot be forced onto the discard list.");
 
         if (!ImGui.BeginTable("relicable_discard_tbl", 5,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.ScrollY,

@@ -1,0 +1,19 @@
+{
+  // Novus stage, final step (after the melding route fills the Sphere Scroll): hand the UNEQUIPPED
+  // Animus weapon and the filled scroll to Jalzahn (Hyrstmill, North Shroud, reached from Fallgourd
+  // Float) via his "Relic Weapon Animus Enhancement" branch -- verified in game data as CustomTalk
+  // 721069 on ENpcBase 1008948, gated by quest 67000 ("Star Light, Star Bright"). The single
+  // NovusUpgrade step resolves the aetheryte/NPC/position at runtime (NexusData), so this is a bare
+  // step. Completion is read from the equipped weapon reaching the Novus tier (NovusUpgraded), which
+  // is job-proof and survives a re-select mid-upgrade -- the scroll is consumed by the trade, so no
+  // item count could be the signal. The melding objective (novus-meld-route) is complete once the
+  // scroll reads 75/75, and NovusUpgraded sorts last in the stage, so the trip only happens after.
+  "stage": "Novus",
+  "book": 0,
+  "id": "novus-upgrade",
+  "displayName": "Relic Weapon Animus Enhancement (Jalzahn) -- click to fly there",
+  "steps": [
+    { "type": "NovusUpgrade" }
+  ],
+  "completion": { "kind": "NovusUpgraded" }
+}

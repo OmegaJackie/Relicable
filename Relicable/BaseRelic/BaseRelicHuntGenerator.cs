@@ -136,11 +136,12 @@ public static class BaseRelicHuntGenerator
     // selecting the Chimera (part 3) at sequence 0.
     //
     // SEAMS (offline-derived, verify in-game -- the same posture the Bard 1125 path documents):
-    //   * The broken weapon is recovered by OPENING the stronghold coffer, addressed by the generic
-    //     name "Treasure Coffer" with no DataId. InteractObjectExecutor's finder is name-driven and
-    //     ObjectKind-tolerant, so it locates the coffer near the stronghold anchor and walks onto it.
-    //     If a job's part-1 object is named differently, author that job's quest-path JSON with the
-    //     exact id/name (it then supersedes this generated block via questPathJobs).
+    //   * The broken weapon is recovered by OPENING the stronghold coffer. Since 1.5.8.5 the object
+    //     is addressed by its OWN game-sheet row -- DataId, name and exact world position, from
+    //     BaseRelicData.BrokenWeaponCoffer -- rather than by the generic name "Treasure Coffer" at a
+    //     transcribed map coordinate. The derivation (EObj.Data -> the relic quest, EObjName, and the
+    //     Level row keyed on the object) reproduces the hand-authored Bard path's coffer exactly, so
+    //     the Bard row is the check on the other nine.
     //   * Sequence 1 = broken weapon and 2 = report are the qstxiv sequence numbers proven by the Bard
     //     path. They are driven by ActiveAtSequence == the live quest sequence, so the checklist's
     //     "Parts 1/2 GlobalParts sequence uncalibrated" note does not affect them.
@@ -155,30 +156,60 @@ public static class BaseRelicHuntGenerator
 
         // seq 1: recover the broken weapon from the beastman stronghold. Teleport to the zone, then
         // find + open the coffer (the executor streams it in near the anchor and walks fully onto it).
+        //
+        // The anchor is the coffer's own Level-sheet position (BaseRelicData.BrokenWeaponCoffer),
+        // NOT the transcribed map coordinate, and it carries its real height so nothing has to be
+        // floor-probed. That matters because InteractObjectExecutor can only see objects within
+        // SearchRadius (100y): five of the ten transcribed anchors were further than that from the
+        // real coffer -- Summoner by 181y -- so the run arrived at a spot where the coffer never
+        // entered the finder and the step timed out having opened nothing. The MapStop is kept for
+        // the prerequisite report's display hint only.
         var bw = data.BrokenWeapon;
+        var coffer = data.BrokenWeaponCoffer;
+        var bwTerritory = coffer.IsAuthored ? coffer.TerritoryTypeId : bw.TerritoryTypeId;
+        var bwAnchor = coffer.IsAuthored
+            ? coffer.World
+            : Data.MapCoords.MapToWorld(bw.TerritoryTypeId, bw.MapX, bw.MapY, bw.MapZ);
+
         var brokenSteps = new List<StepData>();
-        var bwAetheryte = Locations.AetheryteForTerritory(bw.TerritoryTypeId);
+        // NEAREST aetheryte to the coffer, not just "an" aetheryte in the zone. Sapsa Spawning
+        // Grounds (Ninja, Scholar) sits in Western La Noscea, which has two -- exactly the case
+        // AetheryteForTerritory documents itself as getting wrong -- and with the coffer's exact
+        // position now known there is no reason to guess. Falls back to the by-territory pick when
+        // the marker lookup cannot resolve.
+        var bwAetheryte = Locations.NearestAetheryteToWorld(
+            bwTerritory, Locations.MapForTerritory(bwTerritory), bwAnchor)?.AetheryteId ?? 0u;
+        if (bwAetheryte == 0)
+            bwAetheryte = Locations.AetheryteForTerritory(bwTerritory);
         if (bwAetheryte != 0)
             brokenSteps.Add(new StepData { Type = StepType.AetheryteTeleport, AetheryteId = bwAetheryte });
         brokenSteps.Add(new StepData
         {
             Type = StepType.InteractObject,
-            TargetName = "Treasure Coffer",
-            Position = Data.MapCoords.MapToWorld(bw.TerritoryTypeId, bw.MapX, bw.MapY, bw.MapZ),
+            // The object name is per-job data now: Ninja's Yoshimitsu object is a "Banded Chest",
+            // so the old hard-coded "Treasure Coffer" could never match it by name -- and with no
+            // DataId authored either, that step had nothing to find at all.
+            TargetName = coffer.IsAuthored ? coffer.ObjectName : "Treasure Coffer",
+            // The DataId outranks the name in WorldObject.FindNearest, which is what separates this
+            // job's coffer from the other job's identically-named one in the same stronghold.
+            TargetDataId = coffer.DataId,
+            Position = bwAnchor,
         });
         result.Add(BuildStartObjective(job, 1, "broken-weapon",
             $"{RelicJobs.DisplayName(job)}: recover the broken {data.RelicWeaponName} ({bw.Label})",
             brokenSteps));
 
-        // seq 2: report the broken weapon back to Gerolt (advances the quest to Part 2).
+        // seq 2: report the broken weapon back to Gerolt (advances the quest to Part 2). This one is
+        // a hand-over, so it verifies the quest actually moved -- the accept at seq 0 does not need
+        // to, because the controller runs its own accept watchdog for that sequence.
         result.Add(BuildStartObjective(job, 2, "report-broken-weapon",
             $"{RelicJobs.DisplayName(job)}: report the broken {data.RelicWeaponName} (Gerolt, Hyrstmill)",
-            GeroltSteps(geroltAetheryte)));
+            GeroltSteps(geroltAetheryte, advancesQuestFromSequence: 2)));
     }
 
     // Teleport to Gerolt's zone (when an aetheryte resolves) then interact with him; TextAdvance
     // carries the accept / turn-in dialogue. Mirrors the between-trial Gerolt turn-ins below.
-    private static List<StepData> GeroltSteps(uint geroltAetheryte)
+    private static List<StepData> GeroltSteps(uint geroltAetheryte, int advancesQuestFromSequence = 0)
     {
         var steps = new List<StepData>();
         if (geroltAetheryte != 0)
@@ -188,6 +219,7 @@ public static class BaseRelicHuntGenerator
             Type = StepType.InteractNpc,
             NpcDataId = BaseRelicData.GeroltDataId,
             Position = BaseRelicData.GeroltPosition,
+            AdvancesQuestFromSequence = advancesQuestFromSequence,
         });
         return steps;
     }
@@ -235,6 +267,11 @@ public static class BaseRelicHuntGenerator
             Type = StepType.InteractNpc,
             NpcDataId = BaseRelicData.GeroltDataId,
             Position = BaseRelicData.GeroltPosition,
+            // The oil is DELIVERED here, so this is a hand-over like every other: it needs the
+            // Request window driven, and it needs verifying. Sequence 19 is the last journal entry,
+            // so success shows up as the quest COMPLETING -- the verification treats a sequence of 0
+            // (a finished, or unreadable, quest) as credited, which is what covers that.
+            AdvancesQuestFromSequence = 19,
         });
         // EQUIP the finished relic. Gerolt hands it over UNEQUIPPED, and the engine reads which stage
         // a character is on from the weapon in their hands -- so until this runs the line looks
@@ -295,6 +332,10 @@ public static class BaseRelicHuntGenerator
             NpcDataId = npcDataId,
             Position = position,
             UnequipRelicFirst = unequipRelicFirst,
+            // Every one of these steps exists to move the quest off activeSeq. Saying so lets the
+            // executor check that it did, instead of accepting "the conversation ended" as proof --
+            // see StepData.AdvancesQuestFromSequence for what accepting it cost.
+            AdvancesQuestFromSequence = activeSeq,
         });
         // Equip what the turn-in just handed over (the unfinished relic at sequence 9), so the next
         // objective does not travel to the hunt with it sitting in a bag.
@@ -337,10 +378,19 @@ public static class BaseRelicHuntGenerator
         var aetheryte = Locations.AetheryteForTerritory(territory);
 
         var steps = new List<StepData>();
-        // Equip the relic first so the beastmen kills credit toward the quest.
+        // Equip the relic BEFORE travelling: the kills only credit while the unfinished weapon is
+        // in hand, and finding that out after a cross-zone trip costs the whole trip.
         steps.Add(new StepData { Type = StepType.EnsureRelicEquipped });
         if (aetheryte != 0)
             steps.Add(new StepData { Type = StepType.AetheryteTeleport, AetheryteId = aetheryte });
+        // ...and again immediately before the first swing. The check above is separated from the
+        // fighting by a teleport and a cross-zone ride, and anything that takes the weapon off in
+        // between -- a turn-in path that restores gear, a manual swap, a resumed run that re-enters
+        // mid-objective -- is invisible to it. Twenty-four kills that credit nothing look exactly
+        // like twenty-four kills that do, so there is no later signal to catch it. This costs
+        // nothing when the weapon is already right: EnsureRelicEquipped completes on the first tick
+        // without moving an item.
+        steps.Add(new StepData { Type = StepType.EnsureRelicEquipped });
 
         var total = 0;
         foreach (var mob in data.Beastmen)

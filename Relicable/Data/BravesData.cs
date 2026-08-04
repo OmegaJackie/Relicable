@@ -59,6 +59,11 @@ public sealed class BravesMaterial
 // and otherwise reports the native-currency / dungeon-farm requirement.
 public static class BravesData
 {
+    // The umbrella quest that OPENS the Braves stage. Taken from Jalzahn (Quest.csv 65892, ACTOR0
+    // 1008948), and until it is taken none of the four material quests are offered at all -- which is
+    // why a Nexus weapon with nothing accepted has no work and the run used to stop dead.
+    public const string QuestZodiac = "Wherefore Art Thou, Zodiac";
+
     public const string QuestPonze = "A Ponze of Flesh";
     public const string QuestLabor = "Labor of Love";
     public const string QuestMethod = "Method in His Malice";
@@ -235,6 +240,12 @@ public static class BravesData
     // The four repeatable material quests, for detecting which one is active.
     public static readonly IReadOnlyList<string> MaterialQuests = new[] { QuestPonze, QuestLabor, QuestMethod, QuestMother };
 
+    // The stage's quests in the order they must be ACCEPTED. The umbrella comes first because nothing
+    // else is offered until it is taken; the four material quests follow and may all be active at once,
+    // in any order.
+    public static readonly IReadOnlyList<string> AcceptOrder =
+        new[] { QuestZodiac, QuestPonze, QuestLabor, QuestMethod, QuestMother };
+
     // A material quest's current destination NPC: its ENpcResident data id, the overworld
     // TerritoryType to teleport to, an approach anchor (world X/Y/Z from the Level sheet; the
     // NpcInteractor homes on the live NPC by data id once it streams in, so the anchor only needs
@@ -248,6 +259,11 @@ public static class BravesData
     private static BravesNpc? Bookend(string? questName)
         => (questName?.Trim() ?? string.Empty) switch
         {
+            // The umbrella quest is Jalzahn's, at the Hyrstmill anvil -- the same NPC and approach spot
+            // the four relic enhancements use (NexusData), so it is taken from there rather than
+            // re-authored here.
+            QuestZodiac => new("Jalzahn", NexusData.JalzahnNpcId, NexusData.JalzahnTerritory,
+                NexusData.JalzahnPosition, "Hyrstmill, North Shroud"),
             QuestPonze  => new("Papana",       1010809, 156, new Vector3(73.1265f, 33.0666f, -704.391f), "Revenant's Toll, Mor Dhona"),
             QuestLabor  => new("Guiding Star", 1006971, 156, new Vector3(24.3083f, 29.0217f, -726.856f), "Revenant's Toll, Mor Dhona"),
             QuestMethod => new("Adkin",        1010810, 141, new Vector3(109.488f, 31f,      -388.829f), "Black Brush Station, Central Thanalan"),
@@ -265,6 +281,35 @@ public static class BravesData
             QuestMother => new("Ealdwine", 1010811, 138, new Vector3(645.282f, 5.632f, 551.612f), "Swiftperch, Western La Noscea"),
             var other => Bookend(other),
         };
+
+    // A stage quest that is itself gated behind ANOTHER quest, beyond the umbrella every material
+    // quest needs. Only A Treasured Mother has one: Quest 65896's PreviousQuest[1] is 66676 "One Man's
+    // Trash", a Ealdwine sidequest at Swiftperch in Western La Noscea (its own prerequisite is the
+    // Novus quest 66998, so it is available by the time you get here). Until it is COMPLETE, Brangwine
+    // does not offer A Treasured Mother at all -- a trip to her can only come back empty-handed, which
+    // is exactly what "it didn't pick up A Treasured Mother" was.
+    //
+    // Not automatable here: One Man's Trash is an ordinary sidequest with its own search/talk steps,
+    // which is a quest engine's job, not this one's. So it is DETECTED and named instead of attempted.
+    // (Ealdwine being its giver is also why he is where A Treasured Mother reports between batches --
+    // see Reporter above.)
+    public static (uint QuestId, string Name, string Npc, string Where) Prerequisite(string questName)
+        => (questName?.Trim() ?? string.Empty) switch
+        {
+            QuestMother => (66676u, "One Man's Trash", "Ealdwine", "Swiftperch, Western La Noscea"),
+            _ => (0u, string.Empty, string.Empty, string.Empty),
+        };
+
+    // Who OFFERS a quest (Quest.IssuerStart), for the trip that ACCEPTS it. Deliberately not
+    // TurnInNpc: that answers "who now?" for a quest already in progress, and for A Treasured Mother
+    // that is Ealdwine, who cannot give you the quest.
+    public static (string Npc, uint DataId, uint Territory, Vector3 Pos, string Where) QuestGiver(string questName)
+    {
+        var giver = Bookend(questName);
+        return giver == null
+            ? (string.Empty, 0u, 0u, Vector3.Zero, string.Empty)
+            : (giver.Npc, giver.DataId, giver.Territory, giver.Pos, giver.Where);
+    }
 
     // The sequence a material quest parks at for its final turn-in (Quest.TodoParams' last entry).
     private const int FinalSequence = 255;

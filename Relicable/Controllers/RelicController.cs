@@ -283,12 +283,35 @@ public sealed class RelicController
         _animusUpgradeTriedWeaponId = 0;
         _animusUpgradeRefusedWeaponId = 0;
         _animusUpgradeFailures = 0;
+        // A fresh Start re-tries every Braves accept: the player may have just done the sidequest that
+        // was gating one, or cleared whatever stopped the giver offering it.
+        _bravesAcceptFailed.Clear();
+        _bravesFetchTried = false;
+        _bravesDoneLogged = false;
         DebugLog.Info("Start: entering SelectStage");
         return true;
     }
 
+    // Why the run halted, when it halted because the PLAYER has something to do (accept a quest, equip
+    // the right weapon, gather an item the engine does not farm). Empty for a plain stop.
+    //
+    // This exists because a stopped run with no active objective renders an empty main window: the
+    // explanation went to the debug log, which most players never open, so "it just stops and shows
+    // nothing" was indistinguishable from a broken plugin. Set by StopWith, cleared by Stop and Start.
+    public string StopReason { get; private set; } = string.Empty;
+
+    // Halt with guidance the player must act on: log it AND keep it for the main window. Stop() clears
+    // StopReason, so it is assigned after.
+    private void StopWith(string guidance)
+    {
+        DebugLog.Warn(guidance);
+        Stop();
+        StopReason = guidance;
+    }
+
     public void Stop()
     {
+        StopReason = string.Empty;
         _activeExecutor?.Stop(_ctx);
         _activeExecutor = null;
         _ctx.Navmesh.Stop();
@@ -536,6 +559,26 @@ public sealed class RelicController
                 var activeJob = BaseRelicState.ActiveRelicJob();
                 var liveSeq = BaseRelicState.RelicQuestSequenceFor(activeJob);
 
+                // Every generated Relic objective carries a real Job, and the selection filter is
+                // `o.Job == activeJob` -- so an unresolved job does not degrade, it empties the pool
+                // outright and the run stops on the generic "no selectable objective / the trial
+                // duties did not resolve" dump, which points at the wrong thing entirely. Say what
+                // actually happened, and name the raw ClassJob the game reported so the cause is in
+                // the log rather than inferred. Reported live: a Summoner sitting at sequence 4 read
+                // as "Unknown" and could not select the Chimera.
+                if (activeJob == RelicJob.None)
+                {
+                    var rawJob = BaseRelicState.ActiveClassJobId();
+                    var jobName = GameState.ClassJobName(rawJob);
+                    StopWith($"A base-relic quest is active (sequence {liveSeq}) but the job could not be " +
+                             $"determined: the game reports ClassJob {rawJob}" +
+                             (jobName.Length > 0 ? $" ({jobName})" : string.Empty) +
+                             ". Every relic objective belongs to a specific job, so nothing can be selected. " +
+                             "If you are on Arcanist, equip your Summoner or Scholar soul crystal; otherwise " +
+                             "switch to the job whose relic you are building, then /relic start.");
+                    return;
+                }
+
                 // Drop the in-memory "ran this step" markers when the game's quest sequence
                 // advances, so the next quest-path step becomes eligible.
                 if (liveSeq != _lastPathSeq)
@@ -557,20 +600,18 @@ public sealed class RelicController
                     //     there is no start work for this job -- do not re-accept a done quest.
                     if (BaseRelicState.IsBaseRelicObtained(activeJob))
                     {
-                        DebugLog.Info($"{RelicJobs.DisplayName(activeJob)}'s base relic is already complete; no " +
-                                      "start-of-line work for this job. Switch to the job whose relic you want to " +
-                                      "progress, then /relic start.");
-                        Stop();
+                        StopWith($"{RelicJobs.DisplayName(activeJob)}'s base relic is already complete; no " +
+                                 "start-of-line work for this job. Switch to the job whose relic you want to " +
+                                 "progress, then /relic start.");
                         return;
                     }
                     // (b) The line is not unlocked, so "A Relic Reborn" cannot be accepted. Stop with
                     //     guidance instead of talking to Gerolt with no quest to accept and idling.
                     if (!BaseRelicState.RelicLineUnlocked())
                     {
-                        DebugLog.Warn("Cannot start this relic: the Zodiac line is not unlocked yet. Complete " +
+                        StopWith("Cannot start this relic: the Zodiac line is not unlocked yet. Complete " +
                                       "'The Weaponsmith of Legend' (Nedrick Ironheart, Vesper Bay) -- and the ARR " +
                                       "finale 'The Ultimate Weapon' -- then equip the class and /relic start.");
-                        Stop();
                         return;
                     }
                 }
@@ -596,10 +637,9 @@ public sealed class RelicController
                                 _acceptStalledSince = Environment.TickCount64;
                             else if (Environment.TickCount64 - _acceptStalledSince > AcceptStallMs)
                             {
-                                DebugLog.Warn("Interacted with Gerolt but 'A Relic Reborn' was not accepted (the quest " +
+                                StopWith("Interacted with Gerolt but 'A Relic Reborn' was not accepted (the quest " +
                                               "sequence did not advance). Ensure the line is unlocked ('The Weaponsmith " +
                                               "of Legend') and your class's level-50 job quest is complete, then /relic start.");
-                                Stop();
                                 return;
                             }
                         }
@@ -641,13 +681,12 @@ public sealed class RelicController
                         if (Data.ClassWeaponSteps.IsWindow(liveSeq)
                             && Data.ClassWeaponSteps.For(activeJob) is { } classWeapon)
                         {
-                            DebugLog.Warn($"Base relic (sequence {liveSeq}): the quest wants the melded class " +
+                            StopWith($"Base relic (sequence {liveSeq}): the quest wants the melded class " +
                                           $"weapon -- {classWeapon.Annotation}. Buy or craft it, meld the " +
                                           $"{classWeapon.MateriaCount} materia at a materia melder, then hand it to " +
                                           "Gerolt. Open /relic for the step: the weapon and materia there search an " +
                                           "open market board on click, with a travel button to the Limsa Lominsa " +
                                           "board and an Artisan crafting list for the weapon and its pre-crafts.");
-                            Stop();
                             return;
                         }
 
@@ -663,12 +702,11 @@ public sealed class RelicController
                             .FirstOrDefault();
                         if (gatedNext != null)
                         {
-                            DebugLog.Warn($"Base relic ({RelicJobs.DisplayName(activeJob)}): at sequence {liveSeq}, " +
+                            StopWith($"Base relic ({RelicJobs.DisplayName(activeJob)}): at sequence {liveSeq}, " +
                                           $"the next automated step ('{gatedNext.DisplayName}') is not active until " +
                                           $"sequence {gatedNext.ActiveFromSequence}. Advance the quest first -- report to " +
                                           "Gerolt at Hyrstmill (or deliver the requested item), then /relic start. The " +
                                           "between-trial turn-ins are not yet automated.");
-                            Stop();
                             return;
                         }
 
@@ -677,12 +715,11 @@ public sealed class RelicController
                         // plainly instead of dumping the diagnostic.
                         if (generated.Count > 0 && generated.All(IsObjectiveComplete))
                         {
-                            DebugLog.Info($"Base relic ({RelicJobs.DisplayName(activeJob)}): all automatable " +
+                            StopWith($"Base relic ({RelicJobs.DisplayName(activeJob)}): all automatable " +
                                           $"content is complete (sequence {liveSeq}, Relicable {ver}). Follow the " +
                                           "quest journal to finish: buy Radz-at-Han Quenching Oil from Auriana " +
                                           "(15 Allagan tomestones of poetics, Revenant's Toll) and turn in to " +
                                           "Gerolt. The oil exchange and final turn-in are not yet automated.");
-                            Stop();
                             return;
                         }
 
@@ -697,9 +734,8 @@ public sealed class RelicController
                             DebugLog.Warn($"  [{(IsObjectiveComplete(o) ? "done" : "open")}] {o.Id} " +
                                           $"activeAt={o.ActiveAtSequence} completeAt={o.CompleteAtSequence} " +
                                           $"oneTimeDuty={o.OneTimeDutyContentId}");
-                        DebugLog.Warn("If no p06-p09 trial rows are listed, the trial duties did not resolve " +
-                                      "(name/case); otherwise they are being marked complete. Run /relic prereq.");
-                        Stop();
+                        StopWith("If no p06-p09 trial rows are listed, the trial duties did not resolve " +
+                                 "(name/case); otherwise they are being marked complete. Run /relic prereq.");
                         return;
                     }
                     pool = genPool;
@@ -744,13 +780,12 @@ public sealed class RelicController
                     if (incompleteSlots.Count > 0)
                     {
                         var ver = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-                        DebugLog.Warn($"Relic Note {activeNote} has no objective the engine can run, but the game's " +
-                                      $"book memory still shows incomplete slot(s): {string.Join(", ", incompleteSlots)}. " +
-                                      "The book is NOT finished, so the next book cannot be bought yet. The usual cause is a " +
-                                      "book slot Relicable could not generate (a dungeon whose TerritoryType did not resolve); " +
-                                      $"update Relicable ({ver}) or clear those slots manually from the Trials of the Braves " +
-                                      "book, then /relic start.");
-                        Stop();
+                        StopWith($"Relic Note {activeNote} has no objective the engine can run, but the game's " +
+                                 $"book memory still shows incomplete slot(s): {string.Join(", ", incompleteSlots)}. " +
+                                 "The book is NOT finished, so the next book cannot be bought yet. The usual cause is a " +
+                                 "book slot Relicable could not generate (a dungeon whose TerritoryType did not resolve); " +
+                                 $"update Relicable ({ver}) or clear those slots manually from the Trials of the Braves " +
+                                 "book, then /relic start.");
                         return;
                     }
 
@@ -831,10 +866,9 @@ public sealed class RelicController
                             }
                             else
                             {
-                                DebugLog.Warn($"Relic Note {activeNote} (the last book) is complete, but the animus-upgrade " +
+                                StopWith($"Relic Note {activeNote} (the last book) is complete, but the animus-upgrade " +
                                               "objective did not load (run /relic reload). Perform the 'Relic Weapon Atma " +
                                               "Enhancement' at Jalzahn (Fallgourd Float, North Shroud) manually, then /relic start.");
-                                Stop();
                                 return;
                             }
                         }
@@ -860,9 +894,8 @@ public sealed class RelicController
                 }
                 else
                 {
-                    DebugLog.Warn("Atma weapon equipped: buy the first Trials of the Braves book from G'Jusana in Mor " +
+                    StopWith("Atma weapon equipped: buy the first Trials of the Braves book from G'Jusana in Mor " +
                                   "Dhona and equip it, then /relic start. (Auto-buy could not resolve G'Jusana or the first book row.)");
-                    Stop();
                     return;
                 }
             }
@@ -895,11 +928,10 @@ public sealed class RelicController
                     }
                     else
                     {
-                        DebugLog.Warn("Base relic done, but the equipped weapon has not been Zenith-upgraded yet, " +
+                        StopWith("Base relic done, but the equipped weapon has not been Zenith-upgraded yet, " +
                                       "and the zenith-upgrade objective is not loadable (run /relic reload). Trade " +
                                       "it + 3x Thavnairian Mist at the Furnace beside Gerolt (Hyrstmill, North " +
                                       "Shroud) -- see the main window's Zenith guidance -- then /relic start.");
-                        Stop();
                         return;
                     }
                 }
@@ -917,10 +949,9 @@ public sealed class RelicController
                     }
                     else
                     {
-                        DebugLog.Warn("Zenith equipped but no Atma-stage objective is loadable (the atma farm/upgrade " +
+                        StopWith("Zenith equipped but no Atma-stage objective is loadable (the atma farm/upgrade " +
                                       "data files are missing?). Run /relic reload, or farm the 12 atmas and perform " +
                                       "the 'Relic Weapon Zenith Enhancement' at Jalzahn (Hyrstmill) manually.");
-                        Stop();
                         return;
                     }
                 }
@@ -940,32 +971,55 @@ public sealed class RelicController
             // dungeons run via AutoDuty and complete when their drop (a Key Item) is in the bag.
             if (completedStage == RelicStage.Nexus)
             {
-                var bravesPool = pool
-                    .Where(o => o.Stage == RelicStage.Braves && IsBravesDungeonEligible(o))
-                    .ToList();
-                if (bravesPool.Count > 0)
+                // Take EVERY outstanding stage quest before touching a dungeon. The four material
+                // quests run simultaneously and each one adds its own dungeons, so accepting them all
+                // up front maximises what is runnable and saves trickling back to Mor Dhona between
+                // batches. It also closes an ordering trap that made this worse than "lazy": the moment
+                // one material quest is accepted at a sequence that requests a dungeon, that dungeon
+                // fills the pool and the accept branch is never reached again -- so with the accept
+                // check last, "A Treasured Mother" (last in the order) was never picked up at all.
+                if (TrySelectBravesAccept() is { } accept)
                 {
-                    pool = bravesPool;
+                    DebugLog.Info($"Braves: {accept.DisplayName}.");
+                    pool = new List<RelicObjective> { accept };
                 }
-                else if (TrySelectBravesReport() is { } report)
+                else if (TrySelectBravesFetch() is { } fetch)
                 {
-                    // No dungeon eligible, but a quest has obtained a batch and is waiting for the NPC
-                    // report/turn-in -> do that (teleport, interact, hand over) to advance it.
-                    DebugLog.Info($"Braves: no dungeon requested; {report.DisplayName}.");
-                    pool = new List<RelicObjective> { report };
+                    // Pull the quest materials you already own off your retainers before the dungeons,
+                    // so the report step is not reached only to stop on items that were parked all along.
+                    DebugLog.Info($"Braves: {fetch.DisplayName}.");
+                    pool = new List<RelicObjective> { fetch };
                 }
                 else
                 {
-                    DebugLog.Warn(AnyBravesMaterialQuestAccepted()
-                        ? "Braves: no dungeon item is being requested right now across your accepted material " +
-                          "quest(s) -- the current step's drops are obtained, or the next batch is not requested " +
-                          "yet. Gather the vendor/crafted items and turn in what you have; the engine resumes when " +
-                          "a quest asks for the next dungeon items." + BravesReportGuidance()
-                        : "Nexus complete. Accept a Braves material quest (A Ponze of Flesh, Labor of Love, Method " +
-                          "in His Malice, or A Treasured Mother -- they can all be active at once, in any order) and " +
-                          "the engine will run whichever dungeons are being requested.");
-                    Stop();
-                    return;
+                    var bravesPool = pool
+                        .Where(o => o.Stage == RelicStage.Braves && IsBravesDungeonEligible(o))
+                        .ToList();
+                    if (bravesPool.Count > 0)
+                    {
+                        pool = bravesPool;
+                    }
+                    else if (TrySelectBravesReport() is { } report)
+                    {
+                        // No dungeon eligible, but a quest has obtained a batch and is waiting for the
+                        // NPC report/turn-in -> do that (teleport, interact, hand over) to advance it.
+                        DebugLog.Info($"Braves: no dungeon requested; {report.DisplayName}.");
+                        pool = new List<RelicObjective> { report };
+                    }
+                    else
+                    {
+                        StopWith(AnyBravesMaterialQuestAccepted()
+                            ? "Braves: no dungeon item is being requested right now across your accepted material " +
+                              "quest(s) -- the current step's drops are obtained, or the next batch is not requested " +
+                              "yet. Gather the vendor/crafted items and turn in what you have; the engine resumes when " +
+                              "a quest asks for the next dungeon items." + BravesReportGuidance() + BravesAcceptBlockedGuidance()
+                            : "Nexus complete, but no Braves quest could be accepted automatically. Take " +
+                              $"'{Data.BravesData.QuestZodiac}' from Jalzahn (Hyrstmill, North Shroud), then the four " +
+                              "material quests (A Ponze of Flesh, Labor of Love, Method in His Malice, A Treasured " +
+                              "Mother -- all four can be active at once), and the engine will run whichever dungeons " +
+                              "are being requested." + BravesAcceptBlockedGuidance());
+                        return;
+                    }
                 }
             }
         }
@@ -975,26 +1029,68 @@ public sealed class RelicController
         // already applies this, but the Manual branch (pinned to Braves) and an Auto path that skipped
         // the gate (no recognized relic equipped) would otherwise leave all 16 dungeons across all four
         // quests eligible -- the "random dungeons not in any quest" symptom. Per-objective, so the four
-        // quests can be worked simultaneously. No-op when the pool has no quest-tagged Braves work (every
-        // other stage), so it cannot disturb Atma/Animus/Novus/Nexus/Zeta selection.
-        if (pool.Any(o => o.Stage == RelicStage.Braves && !string.IsNullOrEmpty(o.BravesQuest)))
+        // quests can be worked simultaneously.
+        //
+        // ENTRY IS GATED ON HOLDING THE END ITEM, not on the pool. The old test -- "does the pool
+        // contain a quest-tagged Braves objective?" -- was documented as a no-op for every other
+        // stage, and that was simply false. Pool membership only means INCOMPLETE, and a Braves
+        // dungeon objective completes on KeyItemCount: the drop being absent from your key items.
+        // That is true for everyone who has not reached the stage, and true again afterwards because
+        // the turn-in consumes the drops. So all 16 objectives sat in the pool for an Animus- or
+        // Novus-tier weapon, this block ran, and TrySelectBravesAccept sent the run off to accept
+        // Braves quests two stages early -- or, on a first relic, burned four cross-zone trips per
+        // Start on quests the giver cannot offer. Asking whether the stage's OUTPUT already exists
+        // answers both: it is the one signal neither the repeatable quests nor the consumed
+        // materials can give.
+        if (BravesStageWanted(pool))
         {
-            var bravesFiltered = pool
-                .Where(o => o.Stage != RelicStage.Braves || IsBravesDungeonEligible(o))
-                .ToList();
-            if (bravesFiltered.Count == 0)
+            // Outstanding stage quests come first here too (the Auto/Nexus gate above already did this;
+            // this covers Manual pinned to Braves and an Auto path that skipped the gate). Without it a
+            // dungeon that became eligible from the FIRST accepted quest preempts the rest forever.
+            if (TrySelectBravesAccept() is { } pending)
             {
-                DebugLog.Warn(AnyBravesMaterialQuestAccepted()
-                    ? "Braves: no dungeon item is being requested right now across your accepted material " +
-                      "quest(s) (the current step's drops are obtained, or the next batch is not requested yet). " +
-                      "Turn in what you have; the engine resumes when a quest asks for the next dungeon items." + BravesReportGuidance()
-                    : "Braves: accept a material quest (A Ponze of Flesh, Labor of Love, Method in His Malice, or " +
-                      "A Treasured Mother -- they can all be active at once, in any order) and the engine will run " +
-                      "whichever dungeons are being requested.");
-                Stop();
-                return;
+                DebugLog.Info($"Braves: {pending.DisplayName}.");
+                pool = new List<RelicObjective> { pending };
             }
-            pool = bravesFiltered;
+            else if (TrySelectBravesFetch() is { } pendingFetch)
+            {
+                DebugLog.Info($"Braves: {pendingFetch.DisplayName}.");
+                pool = new List<RelicObjective> { pendingFetch };
+            }
+            else
+            {
+                var bravesFiltered = pool
+                    .Where(o => o.Stage != RelicStage.Braves || IsBravesDungeonEligible(o))
+                    .ToList();
+                if (bravesFiltered.Count == 0)
+                {
+                    // No dungeon eligible -> a delivery is due; report/turn in (mirrors the Auto/Nexus
+                    // gate above so Manual-pinned-to-Braves, and an Auto path that skipped that gate, also
+                    // hand over the vendor/crafted/drop batch instead of stopping with the items in hand).
+                    if (TrySelectBravesReport() is { } report)
+                    {
+                        DebugLog.Info($"Braves: no dungeon requested; {report.DisplayName}.");
+                        pool = new List<RelicObjective> { report };
+                    }
+                    else
+                    {
+                        StopWith(AnyBravesMaterialQuestAccepted()
+                            ? "Braves: no dungeon item is being requested right now across your accepted material " +
+                              "quest(s) (the current step's drops are obtained, or the next batch is not requested yet). " +
+                              "Turn in what you have; the engine resumes when a quest asks for the next dungeon items." +
+                              BravesReportGuidance() + BravesAcceptBlockedGuidance()
+                            : "Braves: no stage quest could be accepted automatically. Take " +
+                              $"'{Data.BravesData.QuestZodiac}' from Jalzahn (Hyrstmill, North Shroud), then the four " +
+                              "material quests, and the engine will run whichever dungeons are being requested." +
+                              BravesAcceptBlockedGuidance());
+                        return;
+                    }
+                }
+                else
+                {
+                    pool = bravesFiltered;
+                }
+            }
         }
 
         // Diagnostic: show what the engine considers incomplete for the active book,
@@ -1173,11 +1269,98 @@ public sealed class RelicController
     {
         if (o.Stage != RelicStage.Braves || string.IsNullOrEmpty(o.BravesQuest))
             return true;
+        // Accepting a quest is not dungeon work -- it runs precisely BECAUSE the quest is not accepted
+        // yet, so the accepted-and-requesting test below would filter out the one objective that fixes
+        // that. (This filter is a safety net against running dungeons no quest asked for; an accept
+        // trip is neither a dungeon nor unrequested.)
+        if (o.Completion.Kind == CompletionKind.BravesQuestAccepted)
+            return true;
         var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(o.BravesQuest));
         if (seq <= 0)
             return false; // this drop's material quest is not accepted
         return o.ActiveAtQuestSequences.Count == 0 || o.ActiveAtQuestSequences.Contains(seq);
     }
+
+    // Should the Braves stage be offered work at all?
+    //
+    // Two questions, in this order:
+    //   1. Is there Braves work in the pool to gate? (cheap; keeps this a no-op for other stages)
+    //   2. Do we already HOLD the stage's end item, RelicTargetCount times over?
+    //
+    // (2) is the one that stops the run re-accepting a quest it just finished. It is deliberately a
+    // question about the weapon and not about the quests, because the four material quests are
+    // repeatable -- a finished one reports sequence 0, indistinguishable from never having taken it
+    // -- and the materials are consumed at turn-in, so neither can testify that the stage is done.
+    // A Braves (or Zeta) weapon in hand can, and it survives a plugin reload, a relog, and a job
+    // change, which an in-memory latch would not.
+    //
+    // RepeatCompletedStages turns the count off for players deliberately building another, and is
+    // also the way out if the count cannot see a finished weapon (parked in a retainer or the
+    // glamour dresser rather than the bags/armoury).
+    private bool BravesStageWanted(IReadOnlyList<RelicObjective> pool)
+        => pool.Any(o => o.Stage == RelicStage.Braves && !string.IsNullOrEmpty(o.BravesQuest))
+           && BravesStageReached()
+           && !BravesStageSatisfied();
+
+    // Has the weapon actually got AS FAR AS the Braves upgrade?
+    //
+    // Neither of the other two gates asks this, and between them they leave a hole that swallows
+    // four whole stages. Pool membership only means INCOMPLETE, and a Braves dungeon objective is
+    // incomplete whenever its drop is absent from your key items -- true for everyone below the
+    // stage. BravesStageSatisfied then asks whether the stage's END ITEM exists, but that is a
+    // count across every weapon you OWN, which is the wrong question for someone building a
+    // SECOND relic: with one finished Zodiac Braves (or Zeta) weapon and "Relics to build" at 2,
+    // held(1) < target(2), so it answers "not satisfied" at every stage of the new weapon.
+    //
+    // Both being true at Atma, this block took the pool over and ran Braves dungeons -- and
+    // because it REPLACES the pool rather than adding to it, Atma, Animus, Novus and Nexus were
+    // skipped outright. Reported live: a Summoner on Atma sent repeatedly through the Tam-Tara
+    // Deepcroft (a drop for 'A Treasured Mother', a quest four stages ahead of the weapon).
+    //
+    // The EQUIPPED weapon is the authority here, deliberately, and not the held count the
+    // end-item test uses: the Nexus -> Braves upgrade operates on the weapon in your hands, while
+    // a held count sees the finished relic parked in the armoury and concludes the wrong thing.
+    private bool BravesStageReached()
+    {
+        // Manual mode is an explicit instruction to work a stage -- revisiting one is the entire
+        // point of it -- so it is honoured rather than second-guessed.
+        if (_ctx.Config.StageMode == StageSelectionMode.Manual)
+            return _ctx.Config.ManualStage == RelicStage.Braves;
+
+        var equipped = Steps.RelicStageMemo.EffectiveEquippedStage();
+        // Nothing recognizable in hand is the case this whole block exists to cover, so it stays
+        // permissive there rather than stranding a player whose relic is briefly off (a Jalzahn
+        // trade already keeps its tier alive through RelicStageMemo, so this really does mean
+        // "no relic at all").
+        return equipped == RelicStage.None || equipped >= RelicStage.Nexus;
+    }
+
+    // The end-item test on its own. Every path that could start Braves work asks this -- the entry
+    // gate above AND TrySelectBravesAccept/TrySelectBravesFetch -- because the Nexus branch reaches
+    // those directly, and a guard on one route only is how the re-accept survived in the first place.
+    private bool BravesStageSatisfied()
+    {
+        if (_ctx.Config.RepeatCompletedStages)
+            return false;
+
+        var target = Math.Max(1, _ctx.Config.RelicTargetCount);
+        var held = GameState.HeldRelicCountAtOrAbove(RelicStage.Braves);
+        if (held < target)
+            return false;
+
+        // Edge-triggered: this is reached on every selection pass once the stage is done, and an
+        // unconditional line here would fill the log with the same sentence forever.
+        if (!_bravesDoneLogged)
+        {
+            _bravesDoneLogged = true;
+            DebugLog.Info($"Braves: {held} finished relic weapon(s) held and the target is {target}; " +
+                          "the stage's quests are done and will not be taken again. Raise 'Relics to " +
+                          "build' or tick 'Repeat completed stages' to run it again.");
+        }
+        return true;
+    }
+
+    private bool _bravesDoneLogged;
 
     // True when at least one Braves material quest is currently accepted (drives the guidance wording:
     // "accept a quest" vs "turn in what you have and the next dungeon step will open").
@@ -1214,30 +1397,153 @@ public sealed class RelicController
     // A Braves material quest that is accepted AND holds an obtained dungeon drop not yet handed over is
     // ready for its NPC report/turn-in (which advances it to the next batch). Returns a synthetic report
     // objective for the first such quest, or null. Only reached when no dungeon is eligible.
+    // Braves stage quests this run tried to accept and could not (the giver did not offer it). Skipped
+    // on later passes so the stage keeps running its other work; cleared by Start.
+    private readonly HashSet<string> _bravesAcceptFailed = new(StringComparer.OrdinalIgnoreCase);
+
+    // Whether the Braves retainer fetch has already had its one trip this run. Cleared by Start.
+    private bool _bravesFetchTried;
+
+    // Names any stage quest that is NOT in hand and cannot be, so a stop that looks like "the engine
+    // ignored a quest" says what is actually blocking it. Empty when nothing is blocked.
+    private string BravesAcceptBlockedGuidance()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var quest in Data.BravesData.AcceptOrder)
+        {
+            if (Steps.BravesAcceptExecutor.IsInHand(quest))
+                continue;
+            var prereq = Data.BravesData.Prerequisite(quest);
+            if (prereq.QuestId != 0 && !GameState.IsQuestComplete(prereq.QuestId))
+                sb.Append($"\n'{quest}' is not offered yet: it is gated behind the sidequest " +
+                          $"'{prereq.Name}' from {prereq.Npc} ({prereq.Where}). Complete that and " +
+                          "Relicable will pick the quest up on the next Start.");
+            else if (_bravesAcceptFailed.Contains(quest))
+                sb.Append($"\n'{quest}' could not be accepted (its giver did not offer it); accept it yourself, " +
+                          "then /relic start.");
+        }
+        return sb.ToString();
+    }
+
+    // A retainer trip for the Braves quest materials, when any is short in the bags AND the last bell
+    // scan saw it on a retainer -- or null when there is nothing to pull. The vendor/crafted pieces
+    // (Bombard Core, Sacred Spring Water, the "Perfect ..." crafts) are bought or crafted rather than
+    // farmed, so they habitually sit on a retainer; without this the run reached the report step and
+    // stopped with "gather the vendor/crafted items" for items the player already owned.
+    //
+    // Requires AutoWithdrawFromRetainers: with it off the fetch engine only REPORTS what to drag out,
+    // which an unattended run cannot act on, so Wanted() returns nothing and this never selects.
+    private RelicObjective? TrySelectBravesFetch()
+    {
+        // No point pulling Braves materials off the retainers for a stage that is finished -- that
+        // was a wasted summoning-bell trip every run.
+        if (BravesStageSatisfied())
+            return null;
+
+        // ONE trip per run. The objective's completion re-reads the live plan, so a material the bell
+        // scan sees but the retrieve cannot land (full bags, a stale snapshot) would otherwise leave it
+        // incomplete forever and the run would fly to the bell on a loop.
+        if (_bravesFetchTried)
+            return null;
+        var want = Steps.FetchBravesMaterialsExecutor.Wanted(_ctx);
+        if (want.Count == 0)
+            return null;
+        _bravesFetchTried = true;
+        return new RelicObjective
+        {
+            Stage = RelicStage.Braves,
+            Id = "braves-fetch-materials",
+            DisplayName = $"Fetch {want.Count} Braves material(s) from your retainers",
+            Steps = new List<StepData> { new() { Type = StepType.FetchBravesMaterials } },
+            Completion = new CompletionCondition { Kind = CompletionKind.BravesMaterialsFetched },
+        };
+    }
+
+    // The next Braves stage quest that is not in hand, as a travel-and-accept objective -- or null when
+    // all five are. Order matters: the umbrella ("Wherefore Art Thou, Zodiac", from Jalzahn) must be
+    // taken first because until it is, the four material quests are not offered at all. The four are
+    // then accepted in turn; they may all be active at once, and each one accepted immediately makes
+    // its dungeons eligible, so the run flows straight from here into real work.
+    private RelicObjective? TrySelectBravesAccept()
+    {
+        // Already holding the end item -> the stage is done and its quests are never taken again.
+        // Here as well as at the entry gate because the Nexus branch calls this directly.
+        if (BravesStageSatisfied())
+            return null;
+
+        foreach (var quest in Data.BravesData.AcceptOrder)
+        {
+            if (Steps.BravesAcceptExecutor.IsInHand(quest))
+                continue;
+            // Gated behind another quest (only A Treasured Mother is, behind "One Man's Trash"): the
+            // giver would have nothing to offer, so skip it and keep working the others. The stop
+            // guidance names it rather than letting it look like the engine forgot the quest.
+            var prereq = Data.BravesData.Prerequisite(quest);
+            if (prereq.QuestId != 0 && !GameState.IsQuestComplete(prereq.QuestId))
+                continue;
+            // Already tried this run and the giver did not offer it. Skipping stops one un-offerable
+            // quest from burning the failure backoff and halting a stage that still has real work.
+            if (_bravesAcceptFailed.Contains(quest))
+                continue;
+            var giver = Data.BravesData.QuestGiver(quest);
+            if (giver.DataId == 0)
+                continue; // giver did not resolve; try the next quest rather than stall on this one
+            return new RelicObjective
+            {
+                Stage = RelicStage.Braves,
+                Id = $"braves-accept-{quest}",
+                DisplayName = $"Accept '{quest}' ({giver.Npc}, {giver.Where}) -- click to travel there",
+                BravesQuest = quest,
+                Territory = giver.Territory,
+                // The giver's spot is carried on the step purely so the main window's objective name is
+                // click-to-travel (FirstAuthoredSpot); the executor resolves the NPC by data id itself.
+                Steps = new List<StepData> { new() { Type = StepType.AcceptBravesQuest, Position = giver.Pos } },
+                Completion = new CompletionCondition { Kind = CompletionKind.BravesQuestAccepted },
+            };
+        }
+        return null;
+    }
+
     private RelicObjective? TrySelectBravesReport()
     {
         foreach (var name in Data.BravesData.MaterialQuests)
         {
-            if (GameState.QuestSequence(Data.BravesData.MaterialQuestId(name)) is var seq && seq <= 0)
+            var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
+            if (seq <= 0)
                 continue; // not accepted
             if (Data.BravesData.TurnInNpc(name, seq).DataId == 0)
                 continue; // NPC did not resolve
-            var hasHeldDrop = false;
-            foreach (var m in Data.BravesData.Materials)
-            {
-                if (m.Source != Data.BravesSource.DungeonDrop || m.Quest != name)
-                    continue;
-                var keyId = Data.BravesData.KeyItemId(m.ItemName);
-                if (keyId != 0 && GameState.KeyItemCount(keyId) > 0)
-                {
-                    hasHeldDrop = true;
-                    break;
-                }
-            }
-            if (hasHeldDrop)
+            // Report whenever the quest has no dungeon drop left to FARM at its current sequence -- i.e.
+            // it is sitting at a DELIVERY step. That covers handing over an obtained dungeon batch AND the
+            // VENDOR / CRAFTED / seals delivery steps (step 1 and the final step), which hold no dungeon
+            // drop. The previous "only when a drop is held" test skipped those, so a player who had
+            // gathered everything stalled with "no dungeon requested" instead of turning in (the reported
+            // bug). The report executor hands over exactly what the game's Request window enables and
+            // fails with guidance if items are genuinely missing, so firing it here when a delivery is due
+            // is safe.
+            if (!QuestNeedsDungeonNow(name, seq))
                 return BuildBravesReportObjective(name, seq);
         }
         return null;
+    }
+
+    // True when the quest, at its current sequence, still has a dungeon drop to OBTAIN (requested at this
+    // sequence and not yet held) -- i.e. there is farming to do before the next report. Mirrors
+    // IsBravesDungeonEligible's calibration test (RequestedAtSequences); an uncalibrated drop counts as
+    // requested whenever the quest is accepted (the pre-calibration behaviour).
+    private static bool QuestNeedsDungeonNow(string quest, int seq)
+    {
+        foreach (var m in Data.BravesData.Materials)
+        {
+            if (m.Source != Data.BravesSource.DungeonDrop || m.Quest != quest)
+                continue;
+            if (m.RequestedAtSequences.Count > 0 && !m.RequestedAtSequences.Contains(seq))
+                continue; // this drop is not requested at the current sequence
+            var keyId = Data.BravesData.KeyItemId(m.ItemName);
+            if (keyId != 0 && GameState.KeyItemCount(keyId) == 0)
+                return true; // a requested drop is not yet held -> farm it before reporting
+        }
+        return false;
     }
 
     // Synthetic per-quest report objective (one BravesReport step). The Id carries the live sequence so
@@ -1497,6 +1803,10 @@ public sealed class RelicController
         CompletionKind.AtmaUpgraded => 5, // after the atma farms (ItemCount = 4)
         // After all book slots (0..3): the Atma -> Animus enhancement runs once the books are done.
         CompletionKind.AnimusUpgraded => 5,
+        // After the Alexandrite farm (AlexandriteCount = 4) and the melding route (SphereScrollFull =
+        // 4): the Animus -> Novus enhancement is the last thing in the Novus stage, so the scroll is
+        // always full before the trip to Jalzahn is even considered.
+        CompletionKind.NovusUpgraded => 5,
         _ => 4,
     };
 
@@ -1508,22 +1818,19 @@ public sealed class RelicController
         {
             if (activeNote == 0)
             {
-                DebugLog.Warn("No relic note is active. Equip the relic weapon for this step, then /relic start.");
-                Stop();
+                StopWith("No relic note is active. Equip the relic weapon for this step, then /relic start.");
                 return false;
             }
             if (o.Book != 0 && activeNote != o.Book)
             {
-                DebugLog.Warn($"Wrong relic equipped: active book {activeNote}, this step needs book {o.Book}. Equip the matching relic.");
-                Stop();
+                StopWith($"Wrong relic equipped: active book {activeNote}, this step needs book {o.Book}. Equip the matching relic.");
                 return false;
             }
         }
 
         if (o.RequiredWeaponItemId != 0 && GameState.EquippedRelicItemId() != o.RequiredWeaponItemId)
         {
-            DebugLog.Warn($"Wrong weapon equipped: need item {o.RequiredWeaponItemId}, have {GameState.EquippedRelicItemId()}.");
-            Stop();
+            StopWith($"Wrong weapon equipped: need item {o.RequiredWeaponItemId}, have {GameState.EquippedRelicItemId()}.");
             return false;
         }
 
@@ -1535,9 +1842,8 @@ public sealed class RelicController
         // il125 weapon once the player has actually reached the Braves stage.
         if (o.Completion.Kind == CompletionKind.MahatmaGauge && !GameState.HasBravesRelicEquipped())
         {
-            DebugLog.Warn("The Zeta (Mahatma) farm needs the il125 Zodiac Braves weapon equipped. " +
+            StopWith("The Zeta (Mahatma) farm needs the il125 Zodiac Braves weapon equipped. " +
                           "Equip it (or finish the Braves stage to obtain it first), then /relic start.");
-            Stop();
             return false;
         }
 
@@ -1620,6 +1926,13 @@ public sealed class RelicController
             case ExecutorStatus.Failed:
                 _activeExecutor.Stop(_ctx);
 
+                // A failed accept means the giver did not offer that quest. Remember it so the next
+                // pass moves on to the stage's other work instead of re-flying to the same NPC until
+                // the 3-strike backoff halts a run that still had dungeons to do.
+                if (_objective.Completion.Kind == CompletionKind.BravesQuestAccepted
+                    && !string.IsNullOrEmpty(_objective.BravesQuest))
+                    _bravesAcceptFailed.Add(_objective.BravesQuest);
+
                 // A failed Atma -> Animus enhancement is EVIDENCE, not just a failure. We send the run
                 // to Jalzahn first precisely because he is the only one who can say whether the
                 // complete note on this weapon is its own or a previous relic's leftover -- so when he
@@ -1654,9 +1967,8 @@ public sealed class RelicController
 
                 if (_consecutiveFailures >= MaxConsecutiveFailures)
                 {
-                    DebugLog.Warn($"'{_objective.DisplayName}' failed {_consecutiveFailures}x; stopping to avoid a loop. " +
-                                  "For Novus melding, infuse from the /relic novus window (the controller does not meld unless auto-meld is on).");
-                    Stop();
+                    StopWith($"'{_objective.DisplayName}' failed {_consecutiveFailures}x; stopping to avoid a loop. " +
+                             "For Novus melding, infuse from the /relic novus window (the controller does not meld unless auto-meld is on).");
                     return;
                 }
 
@@ -1740,8 +2052,15 @@ public sealed class RelicController
             // held count drops below the configured goal (lets you go back and farm
             // more). Target of 0 or less means "never auto-complete" (endless).
             CompletionKind.AlexandriteCount =>
-                _ctx.Config.AlexandriteTarget > 0 &&
-                GameState.InventoryCount(Data.NovusData.AlexandriteItemId) >= _ctx.Config.AlexandriteTarget,
+                (_ctx.Config.AlexandriteTarget > 0 &&
+                 GameState.InventoryCount(Data.NovusData.AlexandriteItemId) >= _ctx.Config.AlexandriteTarget)
+                // The farm exists only to feed the melds, and melding SPENDS the stock (one Alexandrite
+                // per meld), so a finished scroll leaves the count at ~0 -- which reads as "re-arm" and
+                // would send the run back to treasure maps forever, with the Novus enhancement waiting
+                // behind it. Once the scroll is at its cap (or the weapon is already Novus) there is
+                // nothing left to spend it on, so the farm is done regardless of the count.
+                || Novus.NovusScrollState.IsScrollFull(_ctx.Config)
+                || GameState.EquippedRelicStage() >= RelicStage.Novus,
             CompletionKind.RelicItem => GameState.EquippedRelicItemId() == c.ExpectedRelicItemId,
             // Full gauge, OR the weapon has already been upgraded to Nexus (the Light was consumed into
             // the upgrade, so a Nexus weapon has no gauge to fill). The second clause stops a manual
@@ -1755,6 +2074,21 @@ public sealed class RelicController
             // The Atma -> Animus enhancement is done once the equipped weapon proves the Animus tier
             // (job-agnostic; the 9 books are consumed by the trade, so never read the item count).
             CompletionKind.AnimusUpgraded => GameState.EquippedRelicStage() >= RelicStage.Animus,
+            // The Sphere Scroll is at its cap, from the game's own infused counter (recorded whenever
+            // the scroll's window is open, so hand-melding counts). Also true once the weapon is
+            // already Novus: the trade consumes the scroll, so there is nothing left to read and the
+            // melding work must not re-arm behind a finished stage.
+            CompletionKind.SphereScrollFull =>
+                Novus.NovusScrollState.IsScrollFull(_ctx.Config) || GameState.EquippedRelicStage() >= RelicStage.Novus,
+            // The Animus -> Novus enhancement is done once the equipped weapon proves the Novus tier
+            // (job-agnostic; the Sphere Scroll is consumed by the trade, so never read an item count).
+            CompletionKind.NovusUpgraded => GameState.EquippedRelicStage() >= RelicStage.Novus,
+            // A Braves stage quest is in hand. Not IsQuestComplete: the four material quests are
+            // repeatable and a completed one must be re-accepted for the next weapon.
+            CompletionKind.BravesQuestAccepted => Steps.BravesAcceptExecutor.IsInHand(o.BravesQuest),
+            // Nothing outstanding is on a retainer (or auto-withdraw is off, which makes this a no-op
+            // rather than a stall). Live-read, so it re-arms if more materials are entrusted later.
+            CompletionKind.BravesMaterialsFetched => Steps.FetchBravesMaterialsExecutor.Wanted(_ctx).Count == 0,
             // The Novus -> Nexus upgrade is done once the equipped weapon proves the Nexus tier
             // (job-agnostic, read from the weapon rather than a per-job item id).
             CompletionKind.NexusUpgraded => GameState.EquippedRelicStage() >= RelicStage.Nexus,

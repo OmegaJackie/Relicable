@@ -1,5 +1,363 @@
 # Changelog
 
+## 1.5.9.0 — Braves work needs a Braves-ready weapon, not just a Braves quest
+
+### Fixed
+
+- **A second relic skipped Atma, Animus, Novus and Nexus and ran Braves dungeons instead.** The
+  Braves block asked two questions, and neither of them was *has this weapon got that far?*
+
+  Pool membership only means **incomplete**, and a Braves dungeon objective is incomplete whenever
+  its drop is absent from your key items — true for everyone below the stage. The end-item test was
+  supposed to catch that, but it counts finished weapons across **everything you own**, which is the
+  wrong question when you are building a *second* relic: with one finished Zodiac Braves or Zeta
+  weapon and "Relics to build" at 2, held(1) &lt; target(2), so it answered "not satisfied" at every
+  stage of the new weapon.
+
+  Both being true at Atma, the block took the pool over — and because it *replaces* the pool rather
+  than adding to it, every stage between Atma and Braves was skipped outright. Reported live: a
+  Summoner on Atma being sent repeatedly through the Tam-Tara Deepcroft, whose drop belongs to
+  'A Treasured Mother' — a quest four stages ahead of the weapon.
+
+  Braves work now also requires the **equipped** weapon to have reached Nexus. Equipped
+  deliberately, and not the held count the end-item test uses: the Nexus → Braves upgrade operates
+  on the weapon in your hands, while a held count sees the finished relic parked in your armoury and
+  concludes the wrong thing. Manual mode is unaffected — pinning a stage is an explicit instruction
+  and is honoured as before.
+
+## 1.5.8.9 — Somebody has to press "Hand Over"
+
+### Fixed
+
+- **The quest delivery window was never clicked.** 1.5.8.8 caught the failed turn-ins and logged the
+  addon chain that was up when they failed; on the sequence-14 hand-over it read exactly
+  `menus open -> Request;`. That is the item-delivery window — TextAdvance carries the dialogue
+  around it but does not press its button, so the window simply sat there until the conversation
+  ended, and the quest never advanced.
+
+  Turn-in steps now press **Hand Over** themselves, and confirm the prompt it raises. The button is
+  driven through ECommons' verified `AddonMaster.Request`, and the click is a no-op unless the game
+  has *enabled* it — which it does only once the requested items are actually in the window's slots.
+  So a turn-in that cannot be satisfied (the item is not in your bags, or is still equipped) now
+  clicks nothing and fails honestly, rather than handing over the wrong thing.
+
+  Two guards keep this narrow: only a step that declares itself a turn-in may press a delivery
+  button at all, and the follow-up "yes" is only ever given after *we* clicked Hand Over — never to
+  a prompt that merely happened to be open, which is the same rule the coffer opener uses.
+
+- **The final turn-in (sequence 19) is now driven and verified like the rest.** It delivers the
+  quenching oil, so it had the same hole; it was the one hand-over not marked as such.
+
+## 1.5.8.8 — A conversation ending is not a turn-in happening
+
+### Fixed
+
+- **Turn-ins reported success without the quest ever crediting.** `InteractNpcExecutor`'s only
+  completion evidence was *the conversation ended* — and a conversation ends whether or not the
+  hand-over actually took. So a turn-in that failed (the item not in the bags, the delivery window
+  never driven, TextAdvance not carrying it) reported Complete anyway.
+
+  What made that fatal rather than merely wrong: the controller then stamped the objective into its
+  in-session ran-markers, so the **only step that could advance the quest was excluded from
+  selection for the rest of the run** — and the next pass found nothing eligible and stopped,
+  telling you to go report to Gerolt by hand. The engine had talked itself out of the one thing it
+  needed to do.
+
+  A turn-in step now names the sequence it exists to clear, and is judged on whether the quest
+  actually moved past it (after a grace window for the server round-trip). If it didn't, the step
+  fails and the run retries instead of marking it done. This is the rule `UpgradeRelicExecutor`
+  already applied to relic upgrades — it refuses to call a conversation successful unless the weapon
+  really changed — now extended to quest turn-ins. Applies to every Gerolt and Rowena hand-over
+  (sequences 2, 3, 5, 6, 8, 9, 11, 13, 14, 18); the sequence-0 accept keeps its existing watchdog.
+
+### Added
+
+- **The delivery window is captured in the log while it is open.** A turn-in that doesn't take is
+  usually one whose hand-over addon nobody drove, and that window is long gone by the time the
+  failure is detectable — so the open-addon chain is now recorded as it appears, and named in the
+  failure message.
+
+## 1.5.8.7 — The beastman hunt insists on the *unfinished* relic
+
+### Fixed
+
+- **The hunt could arm the wrong relic and cull 24 beastmen that credited nothing.** The equip step
+  asked "is *a* relic equipped?" — but 'A Relic Reborn' credits its kills only to the
+  **"Unfinished &lt;weapon&gt;"** Gerolt forges at sequence 9. A finished relic, a Zenith or an Atma
+  of the *same job* is equippable and reads as a relic just as happily, so a character with an
+  older weapon of that job in hand passed the step instantly and hunted with the wrong one. There
+  is no signal when this happens: 24 kills that credit nothing look exactly like 24 that do.
+
+  The equip now knows the difference, and *prefers* the unfinished form when locating one. No step
+  had to be told which weapon it wants — holding an unfinished form is itself proof the base-relic
+  quest is mid-flight, since it exists only between sequence 9 and the hand-back at 14. The check
+  relaxes on its own after that, which keeps the primal trials and every Atma+ upgrade unchanged.
+
+- **A wrong-tier weapon in hand meant the swap was never attempted.** The retry loop bailed out on
+  "some relic is equipped", so it timed out without trying. It now retries against the same test it
+  is judged by.
+
+- **The relic search inherited the Arcanist hole fixed in 1.5.8.6.** It resolved the job from the
+  raw ClassJob id, where Arcanist means "no job", which in this code path means **"accept any relic
+  weapon"** — so a Summoner reading as Arcanist handed the equip whatever relic sorted first,
+  including another job's. The game refuses a wrong-job equip *silently*, so the hunt then ran with
+  the old weapon and the kills quietly failed to credit. It now resolves the job the same way the
+  controller does.
+
+- **The weapon is re-checked immediately before the first swing.** The existing check sat before a
+  teleport and a cross-zone ride, blind to anything that took the weapon off in between. Free when
+  nothing is wrong — the step completes on its first tick without moving an item.
+
+## 1.5.8.6 — An Arcanist is a Summoner when their Summoner relic quest is open
+
+### Fixed
+
+- **Summoner stalled at the Chimera with "no selectable objective ... 0 Relic objective(s) for
+  this job".** The active relic job was read from the ClassJob id alone, and **Arcanist (26) is
+  deliberately unmapped** — it can become either Summoner or Scholar, so it resolved to `None`.
+  Nothing degrades gracefully from there: every generated objective belongs to a specific job and
+  the selection filter is an equality test, so the pool emptied outright and the run stopped while
+  reporting the job as "Unknown".
+
+  The ambiguity is only ambiguous in isolation. When one of the two candidates has its
+  **"A Relic Reborn (&lt;weapon&gt;)" quest live**, that quest names the job outright — and the
+  controller was already reading those rows to find the sequence it printed. It now consults them.
+  Deliberately *not* a general "whatever relic quest is open" fallback: an unmapped id that isn't
+  a documented ambiguity is a genuine non-relic job, and resolving that into someone else's line
+  would route the run into work whose weapon the player cannot equip.
+
+- **The failure message pointed at the wrong thing.** An unresolved job fell through to the generic
+  dump, which advised checking whether the trial duties had failed to resolve by name — unrelated
+  to the actual cause. An undetermined job now stops with its own message, naming the raw ClassJob
+  id and title the game reported.
+
+## 1.5.8.5 — The broken-weapon coffer is a game object, not a wiki coordinate
+
+### Fixed
+
+- **The Summoner broken-weapon step flew to the wrong part of the Sylphlands and opened nothing.**
+  Part 1 navigated to a *transcribed map coordinate* and then hoped the coffer was nearby. The
+  finder can only see objects within 100 yalms of you, and Summoner's authored anchor (25.0, 19.0)
+  sits **181 yalms** from the real coffer — so the run arrived at empty ground, the coffer never
+  streamed into the search, and the step burned its full 120-second timeout without opening
+  anything.
+
+  Summoner was the worst but not the only one: **Warrior (147y), Dragoon (165y), Black Mage (168y)
+  and Ninja (180y)** were all outside the same radius, and Paladin and Scholar were inside it only
+  by margin. Bard worked because its coffer had been hand-authored from the game sheets — which is
+  precisely the fix now applied to the other nine.
+
+  Every one of the ten coffers is now addressed by its own sheet row: the `EObj` whose quest link
+  is that job's relic quest, its `EObjName`, and the exact world position (height included) from
+  its `Level` row. The Bard row regenerates that hand-authored file's coffer to three decimals,
+  which is the check on the other nine.
+
+- **Ninja's part-1 object could never be found by name.** The step hard-coded the target name
+  "Treasure Coffer" for all ten jobs, and authored no DataId to fall back on. Yoshimitsu's object
+  is a **Banded Chest**, so the search had nothing to match. The object name is per-job data now.
+
+- **The wrong coffer in a shared stronghold.** Nine of the ten coffers share a beastman camp with
+  another job's, all under the same name, and the step passed no DataId — so which one it walked to
+  was decided by distance between two objects that can sit a few yalms apart. Each step now carries
+  its own object id, which outranks the name in the finder.
+
+- **Sapsa Spawning Grounds teleported to whichever Western La Noscea aetheryte sorted first.** With
+  the coffer's exact position now known, part 1 picks the *nearest* aetheryte to it rather than
+  "an" aetheryte in the zone. No effect on the single-aetheryte zones.
+
+## 1.5.8.4 — A finished stage is one whose end item you hold
+
+### Fixed
+
+- **The run re-accepted Braves material quests it had just finished.** Nothing anywhere could tell
+  "done" from "never started". The four material quests are *repeatable*, so completing one returns
+  its sequence to 0 — identical to never having taken it — and the materials are *consumed* at
+  turn-in, so the key-item test reads the same before the stage and after it. Every signal the
+  plugin consulted reset at exactly the moment the work finished, so it walked back to Papana and
+  took 'A Ponze of Flesh' again.
+
+  A stage is now judged finished by the one witness that survives: **you hold its end item.** That
+  answer outlives a plugin reload, a relog and a job change, which an in-memory latch would not.
+
+- **Braves work was selected two stages early.** The gate that decided whether to run the Braves
+  block tested "is there a Braves objective in the pool?", documented as a no-op for every other
+  stage. It was not. Pool membership only means *incomplete*, and a Braves dungeon objective is
+  incomplete whenever its drop is absent from your key items — true for everyone who has not reached
+  the stage. So an Animus- or Novus-tier weapon ran the Braves block on every pass: on a repeat
+  relic it accepted the quests two stages ahead of the weapon, and on a first relic it burned four
+  cross-zone accept trips per `/relic start` on quests the giver cannot offer. It now asks whether
+  the stage's output already exists.
+
+### Added
+
+- **"Relics to build"** (default 1) and **"Repeat completed stages"**. At 1, a stage whose end item
+  you already hold is finished and its quests are never offered again. Raise the count to build
+  another weapon and the stage re-opens until you hold that many. The toggle ignores the count
+  entirely — for deliberately re-running a stage, or when a finished weapon sits somewhere the count
+  cannot see it (a retainer, the glamour dresser).
+
+## 1.5.8.3 — The Braves report waits for the hand-over instead of the quest sequence
+
+### Fixed
+
+- **A material quest reported complete without delivering anything.** The report step treated a
+  change in the quest's sequence number as proof the turn-in had happened. It is not: talking to the
+  NPC can advance the quest by itself, and the Request (hand-over) window then opens on top of the
+  *new* sequence. The step saw the sequence move, declared success and tore the interaction down
+  with the items still in the bag — so the run continued as though the batch had been delivered.
+  Doing it by hand worked, because a player finishes the window the executor walked away from.
+
+  The hand-over windows are now driven and checked *before* the sequence is consulted, and while
+  either the Request or the JournalResult summary is open the step is unfinished no matter what the
+  sequence says. This also closes the same race just after the hand-over, where the quest advances
+  while the JournalResult summary is still waiting to be confirmed.
+
+## 1.5.8.2 — Auto-discard only ever touches enemy drops
+
+### Fixed
+
+- **Auto-discard destroyed crafting materials it was never meant to touch.** The feature is called
+  "auto-discard mob drops", but it did not check whether an item came from a mob. It selected by
+  description instead: common (white), stackable, not gear, not usable, vendor price at or under
+  100. That also describes about 5,400 other items — among them the entire Trials of the Braves
+  crafting pipeline. Runs lost Aged Eye of Fire and Aged Pestle Pieces (desynthed from 3,000 gil
+  vendor items), Pumice, Belah'dian Silver, Electrum Sand, Silver Ingot, Sunstone and the Eel Pie
+  ingredients — bought and staged for the eight HQ crafts, then deleted.
+
+  The real fault was the shape of the rule, not a missing entry in it. Every guard was phrased as a
+  reason to *keep* an item, and a list of reasons to keep is incomplete by construction: whatever
+  nobody anticipated gets deleted. Adding the Braves materials to the protected set would have
+  fixed those twelve items and left the next unanticipated ones exposed.
+
+  So the question is now asked the other way round, and answered before anything is deleted: **does
+  this item drop from an enemy?** Only items on a generated allowlist of known enemy drops are
+  eligible. Anything crafted, gathered, fished, bought, desynthed, quest-related or simply not in
+  the table is left alone. The check runs ahead of every other rule and binds both modes *and* the
+  explicit "always discard" list — there is no setting that reaches a non-drop. If the catalogue is
+  missing or unreadable the plugin discards nothing at all and the configuration window says so,
+  rather than falling back to the old behaviour.
+
+### Added
+
+- `tools/gen_mob_drops.py` builds the allowlist from Garland Tools' per-item drop data, classifying
+  only the items that could ever reach the discard call. Responses are cached, so re-running after
+  a patch costs almost nothing.
+
+## 1.5.8.1 — Turn-ins fire on the vendor and crafted delivery steps, not just dungeon batches
+
+### Fixed
+
+- **A material quest was not handed in when you had gathered everything.** The report/turn-in step
+  only triggered when you were *holding a dungeon drop*, so the delivery steps that carry no drop —
+  the first step of each quest (the Bombard Core / Sacred Spring Water / 100k-gil vendor item) and
+  the final step (the two HQ "Perfect ..." crafts) — never fired. With all the items on you the run
+  stopped with "no dungeon requested; gather the vendor/crafted items and turn in what you have" for
+  a turn-in it could have done itself.
+
+  The trigger is now "this quest has no dungeon drop left to farm at its current step" — i.e. a
+  delivery is due — which covers every delivery step (dungeon batches, vendor items, and crafted
+  items). The turn-in executor already hands over exactly what the game's Request window enables and
+  fails with guidance only if an item is genuinely missing, so firing it whenever a delivery is due
+  is safe. The same fallback was added to the Manual-pinned-to-Braves selection path, which had the
+  identical gap.
+
+## 1.5.8.0 — The run fetches its own quest materials
+
+### Added
+
+- **Braves quest materials are pulled off your retainers automatically.** The Bombard Core, Sacred
+  Spring Water, the 100k-gil vendor item and the two HQ "Perfect ..." crafts per quest are bought,
+  crafted or desynthed rather than farmed — so they habitually sit on a retainer. The run would then
+  reach the report step and stop with "gather the vendor/crafted items" for items you already owned.
+
+  Relicable now checks the quest materials against your bags and the last retainer scan, and when
+  something is short but parked, it travels to a summoning bell (Revenant's Toll, where three of the
+  four quest NPCs stand anyway), drives it, and cycles every retainer pulling the stacks in — using
+  the same engine the Braves planner's Fetch buttons already used. This happens before the dungeons,
+  so the materials are in hand long before a turn-in wants them.
+
+  It runs only with "Pull items from retainers" enabled (Config), since with it off the fetch engine
+  only *lists* what to drag, which an unattended run cannot act on. One bell trip per run, so a
+  material a retainer appears to hold but cannot deliver can never put the run in a loop.
+
+## 1.5.7.1 — All four Braves quests, and why one of them can't be taken
+
+### Fixed
+
+- **"A Treasured Mother" was never picked up.** Two things, and either alone was enough.
+
+  The accept check ran *last*, after the dungeon check — so the moment one material quest was
+  accepted at a step that requests a dungeon, that dungeon filled the queue and the accept branch was
+  never reached again. Method in His Malice requests a dungeon at its very first step, so the run
+  went straight into The Wanderer's Palace and A Treasured Mother, last in the order, was left
+  behind. All outstanding stage quests are now taken *before* any dungeon work: they run
+  simultaneously and each one accepted adds its own dungeons, so taking them all up front is both
+  correct and faster.
+
+  And the quest has a prerequisite nothing here knew about: it is gated behind the sidequest **"One
+  Man's Trash"** from Ealdwine at Swiftperch, Western La Noscea. Until that is complete Brangwine
+  does not offer it at all, so the trip could only come back empty-handed. That is an ordinary
+  sidequest with its own steps — a quest engine's job, not this one's — so Relicable now detects the
+  gate, skips the quest, keeps working the other three, and tells you exactly what to complete.
+
+  A quest whose giver refuses it is also remembered for the rest of the run, so one un-offerable
+  quest can no longer burn the failure backoff and halt a stage that still had dungeons to do.
+
+## 1.5.7.0 — A Nexus weapon has somewhere to go, and a stopped run says why
+
+### Added
+
+- **Holding a Nexus weapon with nothing accepted now starts the Braves stage instead of stopping
+  dead.** The stage's work only exists once its quests are in hand — until "Wherefore Art Thou,
+  Zodiac" is taken from Jalzahn none of the four material quests are even offered, and until a
+  material quest is accepted none of its dungeons are requested. So a freshly-upgraded Nexus weapon
+  had *no* objective, and the run halted with an empty window.
+
+  Relicable now travels to each giver and accepts them itself, in the order the game requires: the
+  umbrella quest from Jalzahn at Hyrstmill, then A Ponze of Flesh (Papana), Labor of Love (Guiding
+  Star), Method in His Malice (Adkin) and A Treasured Mother (Brangwine). Each one accepted makes its
+  dungeons eligible immediately, so the run flows straight on into them. The four are repeatable, so
+  a completed one is correctly treated as "needs accepting again" for the next weapon — only the
+  one-time umbrella counts as done once it is done.
+
+### Fixed
+
+- **A stopped run showed a blank window.** Every reason Relicable halts for something *you* need to
+  do — accept a quest, equip the right weapon, gather an item it does not farm — was written only to
+  the debug log, which most people never have open. With no active objective the main window then
+  rendered nothing at all, which is indistinguishable from a broken plugin. The reason is now kept
+  and shown as "Next step" wherever the objective panel would be.
+
+## 1.5.6.0 — A full Sphere Scroll takes itself to Jalzahn
+
+### Added
+
+- **Filling the Sphere Scroll now finishes the Novus stage.** At 75/75 (Paladin: Curtana 53 and Holy
+  Shield 22) the run travels to Jalzahn at Hyrstmill, unequips the Animus weapon so it lists in his
+  turn-in menu, takes "Relic Weapon Animus Enhancement", and re-equips the Novus weapon it hands
+  back — then carries straight on into the Nexus Light farm. Previously the melding was where the
+  Novus stage simply stopped, and the enhancement was yours to remember.
+
+  "Is the scroll full" is read from the game's own infused counter, not from melds Relicable
+  performed, so a scroll you melded entirely by hand counts. That counter only exists while the
+  scroll's window is open, so it is now recorded whenever it is — open the scroll once and the count
+  is remembered from then on. The Novus planner shows it, with a "Go to Jalzahn" button once it is
+  full.
+
+- **The Alexandrite farm stops when there is nothing left to spend it on.** Melding consumes one
+  Alexandrite per meld, so a finished scroll leaves your stock near zero — which read as "below
+  target, farm more" and would have parked the run on treasure maps with the enhancement waiting
+  behind it.
+
+### Fixed
+
+- **The Novus planner's "Line" column was blank.** Its table pinned seven columns to hard-coded pixel
+  widths with no horizontal scrolling. Those widths do not follow Dalamud's UI scale, and ImGui never
+  shrinks a fixed column — so as soon as their total outgrew the window (a narrower window, a scaled
+  style, the scrollbar appearing), the last column fell off the right edge, where its cells are
+  skipped entirely rather than clipped. The table now sizes itself from real text metrics and scrolls
+  sideways instead of dropping a column, and the window has a minimum size.
+
 ## 1.5.5.8 — Ask Jalzahn before spending 500 poetics
 
 ### Fixed

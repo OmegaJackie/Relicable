@@ -36,9 +36,27 @@ public sealed class EnsureRelicEquippedExecutor : ITaskExecutor
         TryEquip(ctx);
     }
 
+    // Whether the weapon in hand is the one this step actually needs.
+    //
+    // "Some relic is equipped" is NOT the test while the character holds an "Unfinished <weapon>".
+    // That form exists only between Gerolt forging it ('A Relic Reborn' sequence 9) and taking it
+    // back (14), and the quest credits the beastman kills and the Hydra to it ALONE -- yet a
+    // finished relic, a Zenith or an Atma of the same job is equippable and reads as RelicStage.Relic
+    // just as happily. So a character with an older relic of that job in hand (a repeat run, or one
+    // equipped by hand) passed this step instantly and then culled 24 beastmen that credited nothing,
+    // with no error anywhere: the kills simply never counted.
+    //
+    // Holding the Unfinished form is itself the signal that it is wanted, so no step has to declare
+    // it. Once it is handed back at sequence 14 the check relaxes on its own, which is what keeps
+    // the primal trials (15-17, fought without it) and every Atma+ upgrade on the old behaviour.
+    private static bool RelicReady()
+        => GameState.HoldsUnfinishedRelic()
+            ? GameState.UnfinishedRelicEquipped()
+            : GameState.EquippedRelicStage() != RelicStage.None;
+
     public ExecutorStatus Update(StepData step, ExecutionContext ctx)
     {
-        if (GameState.EquippedRelicStage() != RelicStage.None)
+        if (RelicReady())
         {
             // A real relic is in hand again, so the live stage read is authoritative once more and
             // any stand-in noted by an unequip step must not linger.
@@ -62,20 +80,29 @@ public sealed class EnsureRelicEquippedExecutor : ITaskExecutor
         }
 
         Diagnostics.DebugLog.Warn(
-            "Could not equip your relic weapon within " + EquipTimeoutMs / 1000 + "s: none was found in your " +
-            "armoury or bags, or the equip did not take (wrong job for the weapon, or the slot was blocked). " +
+            (GameState.HoldsUnfinishedRelic()
+                ? "Could not equip your UNFINISHED relic weapon within " + EquipTimeoutMs / 1000 + "s. You are holding " +
+                  "one, and it is the only weapon 'A Relic Reborn' credits kills to -- another tier of the same " +
+                  "relic in hand will not count. "
+                : "Could not equip your relic weapon within " + EquipTimeoutMs / 1000 + "s: none was found in your " +
+                  "armoury or bags, or the equip did not take (wrong job for the weapon, or the slot was blocked). ") +
             "Equip it manually so the kills credit, then resume.");
         return ExecutorStatus.Failed;
     }
 
-    // One throttled attempt: find any held relic weapon and move it into the main hand. Silent when
-    // nothing is found -- the caller keeps retrying until the grace window is out, because "not
-    // there yet" and "not there at all" look identical until then.
+    // One throttled attempt: find the held relic weapon this step needs and move it into the hand.
+    // Silent when nothing is found -- the caller keeps retrying until the grace window is out,
+    // because "not there yet" and "not there at all" look identical until then.
+    //
+    // The bail-out is RelicReady(), not "any relic is equipped": with the wrong tier already in
+    // hand the latter returned here every time, so the swap to the Unfinished form was never even
+    // attempted and the step just timed out. MoveItemSlot into an occupied weapon slot swaps, so
+    // there is nothing to take off first.
     private void TryEquip(ExecutionContext ctx)
     {
         if (!ctx.Config.AutoEquipRelicInDuty)
             return;
-        if (GameState.EquippedRelicStage() != RelicStage.None)
+        if (RelicReady())
             return;
         if (Environment.TickCount64 - _lastAttempt < RetryIntervalMs)
             return;

@@ -39,6 +39,14 @@ public sealed class NovusWindow : Window
     {
         Size = new Vector2(640, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
+        // Without a floor the window can be dragged narrower than the route table's columns need.
+        // The table scrolls horizontally now, so that is no longer destructive, but a minimum keeps
+        // the plan readable without scrubbing sideways.
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = new Vector2(480, 320),
+            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
+        };
         _config = config;
         _planner = planner;
         _runner = runner;
@@ -236,6 +244,44 @@ public sealed class NovusWindow : Window
             _runner.Stop();
 
         Ui.Wrapped(_runner.Busy ? Yellow : Grey, "Status: " + _runner.Status);
+        DrawScrollProgress();
+    }
+
+    // The scroll's own infused counter, as last read from its open window (NovusScrollState). This is
+    // the value the engine acts on: at the cap it is what ends the melding work and sends the run to
+    // Jalzahn for the Animus -> Novus enhancement, so it is worth showing rather than leaving the
+    // player guessing why (or why not) the trip happened.
+    private void DrawScrollProgress()
+    {
+        var (current, max) = NovusScrollState.Progress(_config);
+        if (max <= 0)
+            return;
+
+        var full = NovusScrollState.IsScrollFull(_config);
+        if (!full && current == 0)
+        {
+            ImGui.TextColored(Grey, "Sphere Scroll: not read yet - open the scroll's melding window once.");
+            Ui.Tooltip("The infused count can only be read while the RelicSphereScroll window is open. " +
+                "Open it once (even without melding) and the count is remembered from then on, " +
+                "including for a scroll you melded by hand.");
+            return;
+        }
+
+        ImGui.TextColored(full ? Green : Yellow, $"Sphere Scroll: {current}/{max} infused" +
+            (full ? " - ready to hand in at Jalzahn." : "."));
+        Ui.Tooltip(full
+            ? "The scroll is at its cap. Press Start on the main window and the run travels to Jalzahn " +
+              "for the 'Relic Weapon Animus Enhancement' (the Animus weapon is unequipped for the " +
+              "turn-in and the Novus weapon re-equipped afterwards), or go yourself with the button."
+            : "Read from the scroll's own counter the last time its window was open. Melding updates it " +
+              "automatically; at the cap the run moves on to Jalzahn on its own.");
+
+        if (!full)
+            return;
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Go to Jalzahn##novusjalzahn"))
+            Steps.LocationNavigator.GoWorld(Data.NexusData.JalzahnTerritory, Data.NexusData.JalzahnPosition);
+        Ui.Tooltip("Flags Jalzahn (Hyrstmill, North Shroud), teleports to Fallgourd Float and flies there.");
     }
 
     private void DrawPriceStatus()
@@ -301,18 +347,35 @@ public sealed class NovusWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(Yellow, $"{scroll.ScrollName} - {scroll.TotalPoints} points, {Gil(scroll.KnownCost)}");
 
+        // Column sizing, and why the last column ("Line") could come up EMPTY: the table used
+        // SizingStretchProp with seven hard-coded pixel widths and no ScrollX. Those widths are raw
+        // pixels, so they do not follow Dalamud's UI scale, and ImGui never shrinks a WidthFixed
+        // column -- once their sum plus the stretch column's minimum exceeds the table's width (a
+        // narrowed window, a vertical scrollbar, a scaled-up style), the overflow falls off the right
+        // edge. A column clipped out that way has IsVisibleX false, so ImGui SKIPS its cells and its
+        // header entirely: the Line column renders nothing, even though LineCost always has text to
+        // draw (a gil amount, "0 gil", or a red "no listing").
+        //
+        // Fixed by matching the Braves planner's tables, which never lost a column: SizingFixedFit +
+        // ScrollX means every column keeps its width and the overflow becomes a horizontal scrollbar
+        // instead of a silently dropped column, and Resizable lets the user retune it. The two gil
+        // columns are sized from real text metrics so they fit their widest value at any font scale;
+        // everything else auto-fits its own contents.
+        var gilWidth = ImGui.CalcTextSize("8,888,888 gil").X + ImGui.GetStyle().CellPadding.X * 2f;
+        var tableSize = new Vector2(0f, (scroll.Lines.Count + 2.5f) * ImGui.GetTextLineHeightWithSpacing());
         if (!ImGui.BeginTable($"route_{scroll.ScrollName}", 8,
-                ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
+                ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingFixedFit |
+                ImGuiTableFlags.Resizable | ImGuiTableFlags.ScrollX, tableSize))
             return;
 
-        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 24);
+        ImGui.TableSetupColumn("#");
         ImGui.TableSetupColumn("Materia");
-        ImGui.TableSetupColumn("Lv", ImGuiTableColumnFlags.WidthFixed, 32);
-        ImGui.TableSetupColumn("Melds", ImGuiTableColumnFlags.WidthFixed, 48);
-        ImGui.TableSetupColumn("Buy", ImGuiTableColumnFlags.WidthFixed, 44);
-        ImGui.TableSetupColumn("Have", ImGuiTableColumnFlags.WidthFixed, 44);
-        ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, 90);
+        ImGui.TableSetupColumn("Lv");
+        ImGui.TableSetupColumn("Melds");
+        ImGui.TableSetupColumn("Buy");
+        ImGui.TableSetupColumn("Have");
+        ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, gilWidth);
+        ImGui.TableSetupColumn("Line", ImGuiTableColumnFlags.WidthFixed, gilWidth);
         ImGui.TableHeadersRow();
 
         var order = 1;
