@@ -110,6 +110,11 @@ public sealed class NovusActionRunner
 
     public void Tick()
     {
+        // Runs in EVERY mode, including Idle: the scroll's infused counter is only readable while its
+        // window is open, so whenever it is, record it. That is what lets a scroll melded entirely by
+        // hand still be seen at 75/75 -- and 75/75 is what sends the run to Jalzahn.
+        NovusScrollState.Observe(_config, () => Plugin.PluginInterface.SavePluginConfig(_config));
+
         switch (Current)
         {
             case Mode.Infusing:
@@ -183,9 +188,15 @@ public sealed class NovusActionRunner
                 // reset, so clear it here and save.
                 var doneSpec = MateriaCatalog.GetScrolls(_config.NovusWeapon).FirstOrDefault(s => s.TotalPoints == m);
                 if (doneSpec != null)
+                {
                     _config.ScrollProgressByScroll.Remove(doneSpec.Name);
+                    // The per-stat block above is wiped, so the authoritative counter is the only
+                    // record that this scroll finished -- and it is what the Novus enhancement
+                    // objective reads to decide the run may go to Jalzahn.
+                    NovusScrollState.Record(_config, doneSpec.Name, cur, m);
+                }
                 Plugin.PluginInterface.SavePluginConfig(_config);
-                Stop($"Scroll complete -- {cur}/{m} infused.");
+                Stop($"Scroll complete -- {cur}/{m} infused. Press Start to hand it to Jalzahn for the Novus enhancement.");
                 return;
             }
             if (_lastInfuseTotal >= 0 && cur > _lastInfuseTotal)

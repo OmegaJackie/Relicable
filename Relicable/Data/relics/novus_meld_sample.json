@@ -1,4 +1,9 @@
 {
+  // Novus stage, step 2 (after the Alexandrite farm): meld the planner's cheapest route into the
+  // Sphere Scroll. Completion is SphereScrollFull, NOT AllStepsDone: the scroll's own infused counter
+  // (75/75; Paladin's Curtana 53 + Holy Shield 22) is the real answer, and reading it means a scroll
+  // melded BY HAND finishes this objective too -- with AllStepsDone only a route the engine melded
+  // itself counted, so a hand-melded scroll left the run melding forever and never reached Jalzahn.
   "stage": "Novus",
   "book": 0,
   "id": "novus-meld-route",
@@ -6,5 +11,5 @@
   "steps": [
     { "type": "MeldNovusRoute" }
   ],
-  "completion": { "kind": "AllStepsDone" }
+  "completion": { "kind": "SphereScrollFull" }
 }

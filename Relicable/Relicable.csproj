@@ -27,9 +27,9 @@
     <LangVersion>latest</LangVersion>
     <!-- Bumped by 0.0.0.1 each change so the dev plugin shows the update.
          Release history lives in CHANGELOG.md, not in this file. -->
-    <Version>1.5.5.8</Version>
-    <AssemblyVersion>1.5.5.8</AssemblyVersion>
-    <FileVersion>1.5.5.8</FileVersion>
+    <Version>1.5.9.0</Version>
+    <AssemblyVersion>1.5.9.0</AssemblyVersion>
+    <FileVersion>1.5.9.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -52,6 +52,11 @@
     </None>
     <!-- qstxiv quest-path files (sequence-driven base-relic objectives). -->
     <None Include="Data\questpaths\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Generated catalogues (tools/). mob_drop_items.json is the allowlist auto-discard is
+         gated on: absent, the plugin discards nothing. -->
+    <None Include="Data\catalogs\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

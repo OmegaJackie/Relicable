@@ -14,8 +14,55 @@ namespace Relicable.BaseRelic;
 public static class BaseRelicState
 {
     // The relic job for the currently equipped job (None if not on a relic job).
+    //
+    // The ClassJob id alone is not always enough. Arcanist (26) is ambiguous by construction --
+    // it becomes either Summoner or Scholar -- so it maps to None, and EVERYTHING keyed on the
+    // active job then silently produces nothing: the controller's objective filter is
+    // `o.Job == activeJob`, and no generated objective carries Job=None, so the pool comes back
+    // empty and the run stops with "no selectable objective ... 0 Relic objective(s) for this job"
+    // while naming the job "Unknown". Reported live on Summoner at sequence 4 (the Chimera).
+    //
+    // But the ambiguity is only ambiguous in isolation. When one of the candidates has its
+    // "A Relic Reborn (<weapon>)" quest LIVE, that quest names the job outright -- and the state
+    // machine is already reading those quest rows anyway (RelicQuestSequenceFor's fallback scans
+    // all ten). So consult it rather than giving up.
+    //
+    // Deliberately NOT a general "whatever relic quest is open" fallback: an unmapped id that is
+    // not ambiguous is a genuine non-relic job (Dark Knight, a crafter), and resolving that into
+    // some other job's line would route the run into work whose weapon the player cannot even
+    // equip. Only a documented ambiguity gets resolved this way.
     public static RelicJob ActiveRelicJob()
-        => RelicJobs.FromClassJobId(GameState.ActiveClassJobId());
+    {
+        var classJobId = GameState.ActiveClassJobId();
+        var byClass = RelicJobs.FromClassJobId(classJobId);
+        if (byClass != RelicJob.None)
+            return byClass;
+
+        var candidates = RelicJobs.AmbiguousCandidates(classJobId);
+        if (candidates.Count == 0)
+            return RelicJob.None;
+
+        var resolved = RelicJob.None;
+        foreach (var job in candidates)
+        {
+            // The EXACT per-job quest id, never RelicQuestSequenceFor: that helper falls back to
+            // "the highest sequence among ALL ten relic quests" when a title does not resolve,
+            // which would report the same live sequence for both candidates and make a perfectly
+            // determinate case look ambiguous. An unresolved title here simply means this
+            // candidate cannot be confirmed, so it is skipped.
+            var qid = RelicQuestIdFor(job);
+            if (qid == 0 || GameState.QuestSequence(qid) <= 0)
+                continue;
+            if (resolved != RelicJob.None)
+                return RelicJob.None; // both lines open at once: still genuinely ambiguous
+            resolved = job;
+        }
+        return resolved;
+    }
+
+    // The raw ClassJob sheet id behind ActiveRelicJob, so a failure to resolve can say what the
+    // game actually reported instead of only "Unknown".
+    public static uint ActiveClassJobId() => GameState.ActiveClassJobId();
 
     // The per-job relic quest title, e.g. "A Relic Reborn (Curtana)".
     public static string RelicQuestNameFor(RelicJob job)

@@ -55,9 +55,28 @@ public static class RelicJobs
         // 26 (Arcanist) intentionally omitted: ambiguous between Summoner and Scholar.
     };
 
+    // The relic jobs a ClassJob id COULD be when it does not resolve to exactly one. Arcanist is
+    // the only ambiguous ARR class -- it becomes either Summoner or Scholar -- and it is what the
+    // game reports for a level-50 Arcanist standing there without the soul crystal equipped, or on
+    // an ACN/SMN/SCH character in any state where the job stone is not read. Callers that have an
+    // independent witness (e.g. which "A Relic Reborn (<weapon>)" quest is live) can use this to
+    // narrow the pair down to one; nobody should guess between them without one.
+    private static readonly Dictionary<uint, RelicJob[]> AmbiguousByClassJobId = new()
+    {
+        [26] = new[] { RelicJob.Summoner, RelicJob.Scholar },
+    };
+
     // The relic job for a ClassJob id, or None when unknown/ambiguous.
     public static RelicJob FromClassJobId(uint classJobId)
         => ByClassJobId.TryGetValue(classJobId, out var j) ? j : RelicJob.None;
+
+    // The candidate relic jobs for a ClassJob id that FromClassJobId could not resolve. Empty for
+    // an id that is simply not a relic class (a Dark Knight has no candidates, and must not be
+    // silently resolved into some other job's line just because that job's quest is open).
+    public static IReadOnlyList<RelicJob> AmbiguousCandidates(uint classJobId)
+        => AmbiguousByClassJobId.TryGetValue(classJobId, out var many)
+            ? many
+            : System.Array.Empty<RelicJob>();
 
     // Human-readable name for the UI and logs.
     public static string DisplayName(RelicJob job) => job switch

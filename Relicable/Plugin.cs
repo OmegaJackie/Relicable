@@ -137,6 +137,10 @@ public sealed class Plugin : IDalamudPlugin
         _universalis = new External.UniversalisClient();
         _bravesUniversalis = new External.UniversalisClient();
         var planner = new Novus.MateriaPlanner(_config, _universalis);
+        // The Braves planner is built here rather than beside its window because the ENGINE needs it
+        // too: the auto-fetch step asks it which quest materials are short and which of those a
+        // retainer is holding.
+        var bravesPlanner = new Braves.BravesPlanner(_config, _bravesUniversalis);
         _retainerScanner = new Novus.RetainerScanner(_config, () => PluginInterface.SavePluginConfig(_config));
         _novusRunner = new Novus.NovusActionRunner(_config, planner, autoRetainer);
 
@@ -156,6 +160,7 @@ public sealed class Plugin : IDalamudPlugin
             Commands = commands,
             Config = _config,
             MateriaPlanner = planner,
+            BravesPlanner = bravesPlanner,
         };
 
         // Objective data: static files (Atma, Novus, upgrades) from Data/relics,
@@ -177,6 +182,9 @@ public sealed class Plugin : IDalamudPlugin
             new AttachMahatmaExecutor(),
             new AtmaUpgradeExecutor(),
             new AnimusUpgradeExecutor(),
+            new BravesAcceptExecutor(),
+            new FetchBravesMaterialsExecutor(),
+            new NovusUpgradeExecutor(),
             new NexusUpgradeExecutor(),
             new AcquireZenithMistExecutor(),
             new ZenithTradeExecutor(),
@@ -214,7 +222,6 @@ public sealed class Plugin : IDalamudPlugin
 
         // Braves (il125) planner: its own Universalis client so its item set does not
         // contend with the Novus planner's price cache. Artisan is optional (best-effort).
-        var bravesPlanner = new Braves.BravesPlanner(_config, _bravesUniversalis);
         var artisan = new ArtisanIpc(PluginInterface);
         // Its own retainer-fetch engine (the Novus panel has one too); the engine itself makes
         // sure only one of them drives the summoning bell at a time.

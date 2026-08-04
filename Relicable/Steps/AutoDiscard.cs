@@ -26,6 +26,9 @@ namespace Relicable.Steps;
 // same handshake LeveReturn uses, so it cannot race us and click No.
 //
 // DISCARDING IS PERMANENT, so the safety rules are the bulk of this file:
+//   * ONLY ITEMS KNOWN TO DROP FROM AN ENEMY are eligible, checked first and binding on every
+//     mode and list (MobDropCatalog). Crafted, gathered, fished, vendored, desynthed, quest and
+//     unrecognized items are never touched, whatever else is configured;
 //   * off by default, and (by default) inert unless the automation is actually running;
 //   * only the four player bags -- never the armoury, key items, crystals or currency, none of
 //     which are even scanned;
@@ -33,6 +36,13 @@ namespace Relicable.Steps;
 //   * a protected id set seeded from the loaded objectives, so any item the relic line counts is
 //     safe automatically -- there is no hand-maintained list to fall out of date;
 //   * the user's own never-discard list, which wins over everything including the discard list.
+//
+// The mob-drop gate exists because the rest of that list was not enough. It was all phrased as
+// reasons to KEEP an item, and any such list is incomplete by construction -- the first thing
+// nobody thought of gets deleted. That happened: the Trials of the Braves crafting materials are
+// white, stackable, cheap, tradeable, not gear and not usable, so every rule here passed them
+// and the plugin destroyed the lot. The gate inverts the question, and an item nobody has
+// classified now survives instead of being deleted.
 //
 // The configuration window renders Preview() -- exactly what would be deleted, right now -- so
 // the consequence of switching this on is visible before it is switched on.
@@ -263,6 +273,24 @@ internal static unsafe class AutoDiscard
         if (itemId == 0)
             return false;
         if (cfg.NeverDiscardItemIds.Contains(itemId))
+            return false;
+
+        // THE GATE: only items known to drop from an enemy may ever be deleted. This is a hard
+        // rule, so it also binds the explicit "always discard" list -- there is no setting, mode
+        // or list that reaches an item which is not a mob drop.
+        //
+        // It is first because everything below it is a REASON TO KEEP, and a list of reasons to
+        // keep can only ever be incomplete. The old rule set was exactly that, and the gap cost
+        // real materials: "white, stackable, cheap, not gear, not usable" also describes the
+        // whole Trials of the Braves crafting pipeline, which auto-discard destroyed -- Aged Eye
+        // of Fire and Aged Pestle Pieces (desynthed from 3,000g vendor items), Pumice,
+        // Belah'dian Silver, Electrum Sand, Silver Ingot, Sunstone and the Eel Pie ingredients.
+        // Asking "did this come off a corpse?" instead of "does this look like junk?" makes the
+        // unanticipated case KEEP rather than DELETE.
+        //
+        // MobDropCatalog returns false while its data file is missing or still loading, so a
+        // broken install discards nothing at all.
+        if (!Data.MobDropCatalog.IsMobDrop(itemId))
             return false;
 
         // Fail SAFE while the protected set is still being built: an unresolved set would quietly

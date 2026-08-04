@@ -871,6 +871,118 @@ materia in RetainerPage1..7, move to the first empty player slot). It fails safe
 retainer open or no free slot = no-op) and needs an in-game check of MoveItemSlot's
 retainer->player behaviour.
 
+### J.5a The full scroll, and the Animus -> Novus enhancement
+
+"Is the Sphere Scroll finished" cannot be answered from the per-stat block: that is a parse
+of the window's summary text, is only trusted when it reconciles with the game's own counter,
+and is WIPED when a scroll completes so the next one starts clean. The authoritative answer is
+AtkValue 10/11 of the open RelicSphereScroll window (RelicMeld.TryReadInfuseTotal), which
+exists only while that window is open.
+
+Novus/NovusScrollState.cs persists it. Observe() runs from the framework tick (via
+NovusActionRunner.Tick, which runs in every mode including Idle) and records "current/max"
+against the scroll spec whose TotalPoints equals max -- the same discriminator ComputeRoute
+uses, so Paladin's Curtana (53) and Holy Shield (22) stay independent. Because the source is
+the game's counter and not melds Relicable performed, a scroll melded BY HAND registers as
+finished. The value is stored, never latched: a fresh scroll's live 0/75 overwrites a
+finished 75/75, and NovusUpgradeExecutor clears the record once the Novus weapon is in hand.
+
+That drives two completions. CompletionKind.SphereScrollFull ends the melding objective
+(novus-meld-route) -- it replaced AllStepsDone, which only counted a route the engine melded
+itself and so left a hand-melded scroll melding forever. AlexandriteCount also completes on a
+full scroll, because melding SPENDS the Alexandrite it measures and a finished scroll would
+otherwise read as "below target, farm more" and park the run on treasure maps.
+
+StepType.NovusUpgrade (Steps/NovusUpgradeExecutor.cs) then performs the trade, on
+JalzahnUpgradeExecutorBase like its three siblings. Jalzahn's "Relic Weapon Animus
+Enhancement" branch is CustomTalk 721069 on ENpcBase 1008948, gated by quest 67000 ("Star
+Light, Star Bright") -- verified in game data, unlike the turn-in submenu below it, which
+stays a logged best-effort seam. It mirrors the Atma -> Animus trade exactly: unequip the
+Animus weapon so it lists in the turn-in menu (noting the tier in RelicStageMemo first),
+pick it by name, re-equip the Novus weapon that comes back unequipped, and complete on the
+equipped weapon reaching the Novus tier. The quest gate accepts "accepted" as well as
+"complete", since Zodiac stage quests park at sequence 0xFF for the whole grind
+(Appendix J note: umbrella quests never complete).
+
+Paladin is two turn-ins (a scroll each). Completion stays "the main hand reached Novus" so a
+line that hands over both at once cannot false-fail; when only the Curtana arrives, the step
+says so rather than silently leaving the shield behind.
+
+### J.5b Braves stage entry (accepting the quests)
+
+The Braves stage has no work until its quests are in hand, and this is a hard ordering: the
+umbrella "Wherefore Art Thou, Zodiac" (Quest 65892, ACTOR0 1008948 = Jalzahn) must be taken
+before the four material quests are offered at all, and a material quest requests no dungeon
+until it is accepted. So a player who had just finished Nexus had zero eligible objectives and
+the run stopped -- the "nothing shows as an active objective" report.
+
+StepType.AcceptBravesQuest (Steps/BravesAcceptExecutor.cs) is the sibling of BravesReport minus
+the hand-over: teleport to the giver's nearest aetheryte, approach by data id, interact, pick the
+quest by NAME if the giver answers with a list first (Jalzahn's relic-enhancement branches sit
+alongside it), then click Accept on JournalAccept. RelicController.TrySelectBravesAccept walks
+BravesData.AcceptOrder and generates the objective for the first quest not in hand; both Braves
+selection dead-ends (the Auto/Nexus gate and the Manual safety net) now try it before stopping.
+
+Accept runs BEFORE the dungeon pool is built, not after. Ordering matters more than it looks: the
+four quests request dungeons at different sequences, and Method in His Malice requests one at its
+FIRST sequence -- so with the accept check last, accepting it made a dungeon eligible, the dungeon
+filled the pool, and the accept branch was never reached again. A Treasured Mother, last in
+AcceptOrder, was therefore never taken at all.
+
+A Treasured Mother is also gated by a second prerequisite (BravesData.Prerequisite): Quest 65896's
+PreviousQuest[1] is 66676 "One Man's Trash", an Ealdwine sidequest at Swiftperch. Until it is
+COMPLETE Brangwine does not offer the quest, so the accept is skipped (the stage keeps working the
+other three) and the stop guidance names the blocker. It is not automated: it is an ordinary
+sidequest with search/talk steps, which is a quest engine's job. Ealdwine being its giver is also
+why he -- not Brangwine -- is where A Treasured Mother reports between batches.
+
+A quest whose giver did not offer it is recorded in _bravesAcceptFailed for the rest of the run, so
+one un-offerable quest cannot burn the 3-strike failure backoff and halt a stage with work left.
+For the same anti-spin reason, an accept whose quest id or giver does not resolve FAILS rather than
+completing: completing would leave it not-in-hand, the controller would re-select the same
+objective, and the pair would spin instantly forever.
+
+"In hand" is NOT IsQuestComplete. The four material quests are REPEATABLE, so a completed one
+still has to be re-accepted for the next weapon; only the one-time umbrella may count as in hand
+once completed. BravesAcceptExecutor.IsInHand encodes exactly that, and CompletionKind
+.BravesQuestAccepted reads it. IsBravesDungeonEligible exempts the accept objective explicitly --
+that filter tests "is this quest accepted and requesting", which would otherwise reject the one
+objective whose whole job is to make it accepted.
+
+### J.5b-2 Braves material auto-fetch
+
+The Braves quests want a Bombard Core, Sacred Spring Water, a 100k-gil vendor item and two HQ
+crafted "Perfect ..." pieces per quest. None of those is farmed, so they habitually live on a
+retainer -- and the report step would stop with "gather the vendor/crafted items" for items the
+player already owned.
+
+StepType.FetchBravesMaterials (Steps/FetchBravesMaterialsExecutor.cs) closes that. Its wanted set is
+`BravesPlanner.ComputePlan().Lines.Where(l => l.Fetchable)` -- short in the bags AND seen on a
+retainer by the bell scan -- which is why BravesPlanner is now built in Plugin.cs and handed to the
+ExecutionContext rather than living only beside its window. If no summoning bell is already in reach
+it teleports to Revenant's Toll (three of the four quest NPCs are there, so the trip is on the way),
+walks onto the bell by name via WorldObject.FindNearest/Interact, and hands the set to the shared
+RetainerFetchRunner, which owns the multi-retainer drive from there.
+
+It deliberately does NOT reuse InteractObjectExecutor for the bell: that executor completes when the
+object's event ENDS, and a summoning bell's event is precisely what the fetch needs to stay inside.
+The approach discipline (land on horizontal distance, sticky until grounded, dismount before firing)
+is copied rather than shared, for the reasons documented on that executor.
+
+Two guards. It selects only with Configuration.AutoWithdrawFromRetainers on, because with it off the
+runner merely REPORTS what to drag, which an unattended run cannot act on. And the controller allows
+ONE trip per run (_bravesFetchTried): the objective's completion re-reads the live plan, so a
+material the scan sees but the retrieve cannot land (full bags, a stale snapshot) would otherwise
+keep the objective incomplete and fly to the bell forever.
+
+### J.5c Why a stopped run explains itself
+
+Every place the controller halts for something the PLAYER must do wrote its guidance to the debug
+log and called Stop(), and the main window renders nothing when there is no active objective -- so
+the symptom was a blank window and a silent halt. RelicController.StopWith(guidance) now logs it
+AND keeps it in StopReason (cleared by Stop and Start), which the main window shows as "Next step".
+Prefer StopWith over `DebugLog.Warn(...); Stop();` for anything actionable.
+
 The planner is also a self-contained tool. Novus/NovusActionRunner.cs is ticked by the
 plugin independently of RelicController, so the Novus popout (/relic novus) can Infuse
 (drive the meld window via RelicMeld) and Fetch from Retainer (pull the route's materia

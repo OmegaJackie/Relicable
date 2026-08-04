@@ -29,6 +29,10 @@ public sealed class ExecutionContext
     // route). Optional so non-Novus executors and tests need not supply it.
     public Novus.MateriaPlanner? MateriaPlanner { get; init; }
 
+    // The Braves (il125) material planner, so the engine can see which quest materials are short and
+    // which of those are sitting on a retainer. Null when it could not be constructed.
+    public Braves.BravesPlanner? BravesPlanner { get; init; }
+
     // Set by the controller so executors can consult the objective they belong to
     // (for example, to read the CompletionCondition for KillTarget).
     public RelicObjective? CurrentObjective { get; set; }

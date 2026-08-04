@@ -26,6 +26,13 @@ public enum StepType
     BuyRelicBook,
     AtmaUpgrade,
     AnimusUpgrade,
+
+    // Novus stage, final step: with the Sphere Scroll at its cap (75/75, or Paladin's 53 + 22), turn
+    // the UNEQUIPPED Animus weapon and the filled scroll in at Jalzahn's "Relic Weapon Animus
+    // Enhancement" branch (CustomTalk 721069) for the il115 Novus weapon.
+    // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
+    NovusUpgrade,
+
     NexusUpgrade,
     BuyRadzOil,
 
@@ -34,6 +41,18 @@ public enum StepType
     // next batch. Completes when the quest sequence advances. Data from BravesData.TurnInNpc.
     // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
     BravesReport,
+
+    // Braves stage entry: travel to a stage quest's giver and ACCEPT it -- the umbrella "Wherefore Art
+    // Thou, Zodiac" from Jalzahn, then the four material quests. Without this a fresh Nexus weapon has
+    // no accepted quest, so no dungeon is requested and the stage has no work at all.
+    // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
+    AcceptBravesQuest,
+
+    // Braves stage: drive a summoning bell and pull the material-quest items you already own out of
+    // your retainers (the vendor/crafted "Perfect ..." pieces habitually live there). Wants
+    // Configuration.AutoWithdrawFromRetainers.
+    // NOTE: like every member, this MUST be registered in Plugin.cs's executor list.
+    FetchBravesMaterials,
 
     // Find a world OBJECT by name (and/or DataId) near an authored position and interact with
     // it -- a quest coffer, a lever, a marker. Distinct from InteractNpc because the finder is

@@ -434,6 +434,21 @@ public static unsafe class GameState
         return p == null ? 0u : p.ClassJob.RowId;
     }
 
+    // Display name for a ClassJob sheet row id, or empty when it does not resolve. Diagnostics
+    // only: it lets a "could not determine the relic job" message name what the game actually
+    // reported (e.g. "arcanist") instead of leaving the reader to guess from a bare number.
+    public static string ClassJobName(uint classJobId)
+    {
+        if (classJobId == 0)
+            return string.Empty;
+        try
+        {
+            return Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.ClassJob>()
+                       .GetRowOrDefault(classJobId)?.Name.ExtractText() ?? string.Empty;
+        }
+        catch { return string.Empty; }
+    }
+
     // Level on the currently active job, or 0 if not logged in.
     public static int ActiveJobLevel()
     {
@@ -605,12 +620,102 @@ public static unsafe class GameState
         return best;
     }
 
+    // How many finished relic weapons are held at or above `stage`, counted across the hands, the
+    // armoury weapon slots and the bags. This is the "do I already have the end item?" question, and
+    // it is the only honest way to ask whether a stage's work is done.
+    //
+    // WHY NOT ASK THE QUESTS. The stage's own quests cannot answer it. The four Braves material
+    // quests are REPEATABLE, so finishing one returns its sequence to 0 -- identical to never having
+    // taken it -- and the plugin walked back to the giver and accepted it again, forever. The
+    // materials cannot answer it either: they are CONSUMED at turn-in, so "the key item is missing"
+    // reads the same before the stage and after it. The weapon is the one witness that survives,
+    // because the stage's whole purpose is to produce it.
+    //
+    // AT OR ABOVE, not equal: each upgrade consumes the previous weapon, so a character who pushed
+    // on to Zeta no longer holds the Braves weapon -- but they certainly finished the Braves stage.
+    // Counting only the exact tier would re-open every stage the moment the next one completed.
+    //
+    // Distinct ITEM IDS, not slots: a weapon in transit can be seen twice (and the Paladin's pair is
+    // two ids of one line), so this counts finished lines, not stacks.
+    public static int HeldRelicCountAtOrAbove(RelicStage stage)
+    {
+        if (stage == RelicStage.None)
+            return 0;
+        var im = InventoryManager.Instance();
+        if (im == null)
+            return 0;
+
+        var seen = new System.Collections.Generic.HashSet<uint>();
+        foreach (var bag in ZenithSearchContainers)
+        {
+            var c = im->GetInventoryContainer(bag);
+            if (c == null || (bag != InventoryType.EquippedItems && !c->IsLoaded))
+                continue;
+            var max = bag == InventoryType.EquippedItems ? 2 : c->Size;
+            for (var i = 0; i < max; i++)
+            {
+                var s = c->GetInventorySlot(i);
+                if (s == null || s->ItemId == 0)
+                    continue;
+                if ((int)StageOfEquippedItem(s->ItemId) >= (int)stage)
+                    seen.Add(s->ItemId);
+            }
+        }
+        return seen.Count;
+    }
+
     // ---- Relic auto-equip (best-effort; ensures the relic is on before a duty) ----
     //
     // True if an item id is one of the known relic weapons (any tier), reusing the same
     // classification as the equipped-stage detection.
     public static bool IsRelicWeaponId(uint itemId)
         => itemId != 0 && StageOfEquippedItem(itemId) != RelicStage.None;
+
+    // True when an "Unfinished <weapon>" is in the hands. This is the weapon 'A Relic Reborn'
+    // means by "arm yourself with the unfinished <weapon>", and the only one whose beastman kills
+    // and Hydra clear credit the quest -- EquippedRelicStage() != None is NOT a sufficient check
+    // for those steps, because every other tier of the same job's relic satisfies it while
+    // crediting nothing.
+    public static bool UnfinishedRelicEquipped()
+    {
+        var im = InventoryManager.Instance();
+        var c = im == null ? null : im->GetInventoryContainer(InventoryType.EquippedItems);
+        if (c == null)
+            return false;
+        for (var i = 0; i <= 1; i++) // 0 = main hand, 1 = off hand
+        {
+            var s = c->GetInventorySlot(i);
+            if (s != null && s->ItemId != 0 && RelicWeaponStages.IsUnfinishedForm(s->ItemId))
+                return true;
+        }
+        return false;
+    }
+
+    // True when an "Unfinished <weapon>" is held ANYWHERE (hands, armoury weapon slots, bags).
+    // The form only exists between Gerolt forging it (sequence 9) and taking it back (14), so
+    // holding one is self-evident proof that the base-relic quest is mid-flight -- which is how
+    // the equip step knows to insist on it without any caller having to say so.
+    public static bool HoldsUnfinishedRelic()
+    {
+        var im = InventoryManager.Instance();
+        if (im == null)
+            return false;
+        foreach (var bag in ZenithSearchContainers)
+        {
+            var c = im->GetInventoryContainer(bag);
+            // EquippedItems reads without the IsLoaded gate, as every other scan here does.
+            if (c == null || (bag != InventoryType.EquippedItems && !c->IsLoaded))
+                continue;
+            var max = bag == InventoryType.EquippedItems ? 2 : c->Size;
+            for (var i = 0; i < max; i++)
+            {
+                var s = c->GetInventorySlot(i);
+                if (s != null && s->ItemId != 0 && RelicWeaponStages.IsUnfinishedForm(s->ItemId))
+                    return true;
+            }
+        }
+        return false;
+    }
 
     // Containers an unequipped relic weapon can sit in: the armoury weapon slots (where a weapon
     // lands when swapped off) first, then the four bags. ArmoryOffHand is included for the
@@ -634,15 +739,38 @@ public static unsafe class GameState
     // kills quietly failed to credit. Scanning the current job's weapons first fixes that; the
     // job-agnostic pass is kept as a fallback for the ids that carry no job mapping (the il125
     // Braves and il135 Zeta finals) and for an unrecognized class.
+    // THE UNFINISHED FORM WINS over any other tier of the same job's relic. During 'A Relic Reborn'
+    // the quest credits kills ONLY to the "Unfinished <weapon>" Gerolt forges at sequence 9 -- but a
+    // finished relic, a Zenith or an Atma of the SAME job is equippable and reads as a relic just as
+    // happily, so on a repeat run (or with an older relic parked in the armoury) the hunt would arm
+    // the wrong weapon, complete its equip step, and cull 24 beastmen that credit nothing. Holding
+    // an Unfinished form at all means the base-relic quest is mid-flight, since it exists only
+    // between sequence 9 and the hand-back at 14 -- so no caller has to say which weapon it wants.
     public static bool TryFindRelicInBags(out InventoryType container, out ushort slot)
     {
-        var job = RelicJobs.FromClassJobId(ActiveClassJobId());
-        return TryFindRelicInBags(job, out container, out slot)
-               || (job != RelicJob.None && TryFindRelicInBags(RelicJob.None, out container, out slot));
+        // Resolve the job the way the controller does, NOT from the raw ClassJob id: Arcanist (26)
+        // is ambiguous and FromClassJobId returns None for it. None means "accept any relic weapon"
+        // below, so on a Summoner reading as Arcanist -- see BaseRelicState.ActiveRelicJob -- this
+        // handed the equip whatever relic sorted first, including another job's. The game refuses a
+        // wrong-job equip SILENTLY, so the hunt then ran with the old weapon in hand and the kills
+        // quietly failed to credit.
+        var job = BaseRelic.BaseRelicState.ActiveRelicJob();
+        if (job != RelicJob.None)
+        {
+            if (TryFindRelicInBags(job, unfinishedOnly: true, out container, out slot))
+                return true;
+            if (TryFindRelicInBags(job, unfinishedOnly: false, out container, out slot))
+                return true;
+        }
+        // Job-agnostic fallback, for the ids that carry no job mapping (the il125 Braves and il135
+        // Zeta finals) and for a class we do not recognize.
+        return TryFindRelicInBags(RelicJob.None, unfinishedOnly: false, out container, out slot);
     }
 
     // requiredJob None = accept any relic weapon; otherwise only ones that job can equip.
-    private static bool TryFindRelicInBags(RelicJob requiredJob, out InventoryType container, out ushort slot)
+    // unfinishedOnly restricts the match to the "Unfinished <weapon>" form.
+    private static bool TryFindRelicInBags(RelicJob requiredJob, bool unfinishedOnly,
+        out InventoryType container, out ushort slot)
     {
         container = default;
         slot = 0;
@@ -660,6 +788,8 @@ public static unsafe class GameState
                 if (s == null || s->ItemId == 0)
                     continue;
                 if (!IsRelicWeaponId(s->ItemId))
+                    continue;
+                if (unfinishedOnly && !RelicWeaponStages.IsUnfinishedForm(s->ItemId))
                     continue;
                 if (requiredJob != RelicJob.None && RelicWeaponStages.JobOf(s->ItemId) != requiredJob)
                     continue;

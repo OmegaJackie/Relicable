@@ -37,6 +37,31 @@ internal static unsafe class DialogueMenu
         return true;
     }
 
+    // Click "Hand Over" on the quest item-delivery window (the "Request" addon), the window a quest
+    // turn-in opens to take items off you. TextAdvance carries the surrounding dialogue but does not
+    // press this button, so before 1.5.8.9 the window simply sat there: the conversation ended, the
+    // quest never advanced, and the run reported a turn-in that had not happened (see
+    // StepData.AdvancesQuestFromSequence). Confirmed live on the sequence-14 hand-over -- the failure
+    // log's captured addon chain read exactly "menus open -> Request;".
+    //
+    // Returns true only when the click actually fired. The enabled check is the safety property that
+    // makes this callable on a timer: the game leaves Hand Over DISABLED until the requested items are
+    // in the window's slots, so a turn-in we cannot satisfy (the item is not in the bags, or is still
+    // equipped) clicks nothing rather than handing over the wrong thing. The button is looked up
+    // through ECommons' verified AddonMaster.Request (component id 14) and null-checked first --
+    // its own IsHandOverEnabled dereferences the button without one.
+    public static bool HandOverRequest()
+    {
+        var addon = GetVisible("Request");
+        if (addon == null)
+            return false;
+        var master = new AddonMaster.Request(addon);
+        if (master.HandOverButton == null || !master.IsHandOverEnabled)
+            return false;
+        master.HandOver();
+        return true;
+    }
+
     // Select the entry at zero-based index. Returns false if the addon is not
     // currently open, so callers can poll until it is.
     public static bool Select(string addonName, int index)

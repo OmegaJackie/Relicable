@@ -40,6 +40,12 @@ public static class RelicWeaponStages
     // enhancement. Kept apart from the bare ids because the Atma turn-in consumes THIS form
     // (not the bare relic), and the menu must pick it by name from the bags (it is unequipped).
     private static readonly HashSet<uint> ZenithFormIds = new();
+    // The "Unfinished <base>" form ids. This form exists ONLY inside the 'A Relic Reborn' quest --
+    // Gerolt forges it at sequence 9 and takes it back at 14 -- and it is the weapon the quest
+    // means by "arm yourself with the unfinished <weapon>". Tracked separately because it is the
+    // ONLY form whose beastman kills and Hydra clear credit the quest: any other tier of the same
+    // job's relic is equippable, reads as RelicStage.Relic, and credits NOTHING.
+    private static readonly HashSet<uint> UnfinishedFormIds = new();
     // bare base relic id -> the "<base> Zenith" id its Furnace trade hands back. The Zenith trade
     // is driven by picking the shop row that YIELDS this item, so the automation never fires at a
     // row it cannot positively identify.
@@ -101,6 +107,15 @@ public static class RelicWeaponStages
     {
         Ensure();
         return ZenithFormIds.Contains(itemId);
+    }
+
+    // True for an "Unfinished <base>" weapon -- the form 'A Relic Reborn' hands over at sequence 9
+    // and takes back at 14. Holding one is proof the base-relic quest is mid-flight, and it is the
+    // only weapon whose kills credit that quest's beastman hunt.
+    public static bool IsUnfinishedForm(uint itemId)
+    {
+        Ensure();
+        return UnfinishedFormIds.Contains(itemId);
     }
 
     // The "<base> Zenith" weapon a bare base relic's Furnace trade yields, or 0 when the id is not
@@ -167,7 +182,10 @@ public static class RelicWeaponStages
                     MistCostByBareId[bareId] = mistCost;
                 // The "Unfinished" form is optional: the Paladin's Holy Shield off-hand has no
                 // unfinished version, so a miss is expected data, not a gap -> do not warn.
-                MapOptional(itemsByName, RelicStage.Relic, "Unfinished " + baseName, "Unfinished " + StripThe(baseName));
+                var unfinishedId = MapOptional(itemsByName, RelicStage.Relic,
+                    "Unfinished " + baseName, "Unfinished " + StripThe(baseName));
+                if (unfinishedId != 0)
+                    UnfinishedFormIds.Add(unfinishedId);
                 MapFirst(itemsByName, RelicStage.Relic, unresolved, $"{baseName} Zenith");
                 // Remember the Zenith form's id (the Atma turn-in item, picked by name at Jalzahn),
                 // and which bare relic's Furnace trade produces it (the Zenith trade's row match).
@@ -244,16 +262,18 @@ public static class RelicWeaponStages
     }
 
     // Like MapFirst but for forms that legitimately may not exist (e.g. the Holy Shield has no
-    // "Unfinished" version): map the first candidate that resolves, and record nothing when none
-    // do, so an expected absence does not surface as an "unresolved names" warning.
-    private static void MapOptional(Dictionary<string, uint> itemsByName, RelicStage stage, params string[] candidates)
+    // "Unfinished" version): map the first candidate that resolves and return its id, and record
+    // nothing when none do (returning 0), so an expected absence does not surface as an
+    // "unresolved names" warning.
+    private static uint MapOptional(Dictionary<string, uint> itemsByName, RelicStage stage, params string[] candidates)
     {
         foreach (var c in candidates)
             if (itemsByName.TryGetValue(Key(c), out var id) && id != 0)
             {
                 StageById[id] = stage;
-                return;
+                return id;
             }
+        return 0u;
     }
 
     // Drop a leading "The " (used to derive the Summoner unfinished name "Unfinished Veil

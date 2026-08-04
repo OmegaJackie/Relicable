@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 using Relicable.Model;
 
 namespace Relicable.BaseRelic;
@@ -91,6 +92,55 @@ public sealed class MapStop
         => MapZ = mapZ;
 }
 
+// The quest-placed world object that holds the broken relic weapon (Part 1).
+//
+// Unlike MapStop -- a hand-transcribed wiki coordinate kept for display -- every field here is
+// DERIVED FROM THE GAME SHEETS, by the same chain that produced the hand-authored Bard path (1125):
+//   EObj.Data      -> the relic quest row, so the object is identified by the quest it belongs to
+//   EObjName       -> its display name
+//   Level(Object=) -> its exact world position, height included
+// The Bard row reproduces that file's coffer exactly (2002497 at 697.691, 287.493, 38.492), which
+// is what validates the other nine.
+//
+// This exists because the transcribed MapStop coordinates were not accurate enough to navigate to.
+// InteractObjectExecutor only sees objects within SearchRadius (100y) of the player, and five of the
+// ten authored anchors sat FURTHER than that from the real coffer -- Summoner worst at 181y -- so the
+// run flew to an empty patch of the stronghold, never streamed the coffer into the finder, and timed
+// out 120s later without opening anything. Reported live on Summoner.
+public sealed class QuestCoffer
+{
+    // EObj row id, which is also the live object's BaseId. WorldObject.FindNearest ranks an id hit
+    // above a bare name hit -- load-bearing here, because most strongholds hold TWO jobs' coffers
+    // under the same name (Zahar'ak: Paladin + Monk, U'Ghamaro: Warrior + Black Mage + White Mage,
+    // Natalan: Dragoon + Bard, Sapsa: Ninja + Scholar).
+    public uint DataId { get; init; }
+
+    // The object's display name (EObjName). "Treasure Coffer" for the nine ARR relics; Ninja's
+    // Yoshimitsu is a "Banded Chest", which is why this is per-job data and not the constant the
+    // generator used to hard-code for every job.
+    public string ObjectName { get; init; } = string.Empty;
+
+    // TerritoryType of the object's Level row -- the zone actually teleported to.
+    public uint TerritoryTypeId { get; init; }
+
+    // Exact world position from the Level row. The height is REAL, so the anchor is used as-is:
+    // InteractObjectExecutor only floor-probes an anchor whose Y is 0 (a map-derived one).
+    public Vector3 World { get; init; }
+
+    // False for a job with no authored coffer, so the generator can fall back to the map stop.
+    public bool IsAuthored => DataId != 0 || ObjectName.Length > 0;
+
+    public QuestCoffer() { }
+
+    public QuestCoffer(uint dataId, string objectName, uint territoryTypeId, float x, float y, float z)
+    {
+        DataId = dataId;
+        ObjectName = objectName;
+        TerritoryTypeId = territoryTypeId;
+        World = new Vector3(x, y, z);
+    }
+}
+
 // One of the three beastmen culled 8 times each in Part 5 (the unfinished-relic hunt).
 // MapX/MapY are the in-game map coordinates of a primary spawn cluster for this mob,
 // used as the navigation anchor; the hunt generator converts them to a world point and
@@ -131,8 +181,11 @@ public sealed class JobRelicData
     public string RelicWeaponName { get; init; } = string.Empty;
     public string? SecondaryRewardName { get; init; }
 
-    // Part 1: the broken quest weapon recovered from a beastman stronghold.
+    // Part 1: the broken quest weapon recovered from a beastman stronghold. The MapStop is the
+    // DISPLAY coordinate (the prerequisite report's "where to go" hint); BrokenWeaponCoffer is
+    // the game-sheet-derived object the run actually navigates to and opens.
     public MapStop BrokenWeapon { get; init; } = new();
+    public QuestCoffer BrokenWeaponCoffer { get; init; } = new();
 
     // Part 2: the class weapon that is melded with two Grade III materia.
     public string ClassWeaponName { get; init; } = string.Empty;

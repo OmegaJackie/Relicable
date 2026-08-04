@@ -109,9 +109,22 @@ public sealed class BravesReportExecutor : ITaskExecutor
         if (_phase == Phase.Done)
             return ExecutorStatus.Complete;
 
+        // The turn-in windows are driven (and observed) BEFORE the completion test, because a changed
+        // sequence is NOT proof that the delivery happened.
+        //
+        // Talking to the NPC can advance the quest on its own -- the Request window then opens on top
+        // of the NEW sequence. Testing the sequence first therefore reported Complete while the
+        // Request was still up with the items in the bag: the step "succeeded", nothing was handed
+        // over, and Stop() tore down the interaction. Doing it by hand worked because a human finishes
+        // the window the executor walked away from. The same hazard sits immediately after HandOver(),
+        // when JournalResult is still waiting to be confirmed.
+        //
+        // So while either window is up this step is unfinished, whatever the sequence says.
+        var windowUp = _phase == Phase.Interact && DriveTurnIn();
+
         // Authoritative completion: the quest sequence changed -- it advanced to the next batch, or the
         // final turn-in completed it (sequence -> 0). Job/language proof; never a proxy event.
-        if (_questId != 0 && GameState.QuestSequence(_questId) != _startSeq)
+        if (!windowUp && _questId != 0 && GameState.QuestSequence(_questId) != _startSeq)
             return ExecutorStatus.Complete;
 
         switch (_phase)
@@ -149,8 +162,6 @@ public sealed class BravesReportExecutor : ITaskExecutor
                                   "then /relic start.");
                     return ExecutorStatus.Failed;
                 }
-
-                var windowUp = DriveTurnIn();
 
                 if (p == InteractionPhase.Done && !windowUp)
                 {

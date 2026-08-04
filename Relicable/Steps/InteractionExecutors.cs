@@ -22,6 +22,10 @@ public sealed class InteractNpcExecutor : ITaskExecutor
 {
     public StepType Handles => StepType.InteractNpc;
 
+    // The quest sequence needs a server round-trip after the conversation closes, so a turn-in
+    // judged on the same tick would read as failed every single time, including every success.
+    private const long QuestAdvanceGraceMs = 3000;
+
     private readonly NpcInteractor _npc = new();
 
     // The equipped weapon slots this step unequipped (0 = main hand, 1 = off hand), so Stop can put
@@ -29,25 +33,113 @@ public sealed class InteractNpcExecutor : ITaskExecutor
     // the executor is a reused singleton, so a stale entry would re-equip on an unrelated turn-in.
     private readonly System.Collections.Generic.List<uint> _unequipped = new();
 
+    // An addon stays visible for a frame or more after a click, so firing every tick double-clicks
+    // into whatever replaces it. Same throttle discipline as InteractObjectExecutor's Yes/No.
+    private const long DialogCooldownMs = 400;
+
+    // When the conversation ended (0 = it has not), so the grace above can be measured.
+    private long _dialogueEndedAt;
+    // Throttle + evidence for the hand-over window.
+    private long _lastHandOver;
+    private bool _handedOver;
+    // Last set of open dialogue addons seen, logged once per change. A turn-in that does not take
+    // is almost always one whose delivery window nobody drove, and the window is gone by the time
+    // we can tell -- so the chain is captured while it is up.
+    private string _lastMenuSig = string.Empty;
+
     public void Start(StepData step, ExecutionContext ctx)
     {
         if (ctx.Config.EnableTextAdvance)
             ctx.TextAdvance.Enable();
         _npc.Reset();
         _unequipped.Clear();
+        _dialogueEndedAt = 0;
+        _lastMenuSig = string.Empty;
+        _lastHandOver = 0;
+        _handedOver = false;
 
         if (step.UnequipRelicFirst)
             UnequipRelicWeapons();
     }
 
     public ExecutorStatus Update(StepData step, ExecutionContext ctx)
-        => ToStatus(_npc.Tick(step.NpcDataId, step.Position, ctx));
+    {
+        var phase = _npc.Tick(step.NpcDataId, step.Position, ctx);
+
+        // Capture the delivery window while it is open (see _lastMenuSig).
+        var sig = DialogueMenu.OpenSignature();
+        if (sig != _lastMenuSig)
+        {
+            _lastMenuSig = sig;
+            if (!string.IsNullOrEmpty(sig))
+                DebugLog.Verbose($"Turn-in (NPC {step.NpcDataId}): menus open -> {sig}");
+        }
+
+        // Drive the hand-over window. Only for a step that declares itself a turn-in, so a plain
+        // conversation can never press a delivery button; and the click itself is a no-op unless the
+        // game has enabled it, which it does only once the requested items are in the slots.
+        if (step.AdvancesQuestFromSequence > 0)
+            DriveHandOver();
+
+        // A plain conversation is done when it ends. A TURN-IN is not: see below.
+        if (phase != InteractionPhase.Done || step.AdvancesQuestFromSequence <= 0)
+            return ToStatus(phase);
+
+        // The conversation ended. That is not evidence the hand-over happened -- the dialogue
+        // closes either way -- so the witness is the quest itself: it must have moved past the
+        // sequence this step exists to clear. Anything else and the run would mark the ONLY step
+        // that can advance the quest as done, exclude it from selection, and then stop asking the
+        // player to go report to Gerolt by hand.
+        var liveSeq = BaseRelic.BaseRelicState.RelicQuestSequenceFor(BaseRelic.BaseRelicState.ActiveRelicJob());
+        if (liveSeq > step.AdvancesQuestFromSequence || liveSeq == 0)
+            return ExecutorStatus.Complete; // advanced (or the quest finished outright)
+
+        var now = Environment.TickCount64;
+        if (_dialogueEndedAt == 0)
+            _dialogueEndedAt = now;
+        if (now - _dialogueEndedAt < QuestAdvanceGraceMs)
+            return ExecutorStatus.InProgress; // the sequence update is still in flight
+
+        DebugLog.Warn($"Turn-in at NPC {step.NpcDataId}: the conversation ended but the relic quest is " +
+                      $"still at sequence {liveSeq} -- the hand-over did not take. Usual causes: the item " +
+                      "is not in your bags, or TextAdvance is not carrying the delivery window. Failing so " +
+                      "the run retries rather than marking the step done and stalling." +
+                      (string.IsNullOrEmpty(_lastMenuSig) ? string.Empty : $" Last menus seen: {_lastMenuSig}."));
+        return ExecutorStatus.Failed;
+    }
 
     public void Stop(ExecutionContext ctx)
     {
         if (ctx.Config.EnableTextAdvance)
             ctx.TextAdvance.Disable();
         RestoreRelicWeapons();
+    }
+
+    // Press "Hand Over" on the quest delivery window, then confirm the prompt it raises.
+    //
+    // The confirmation is gated on having actually clicked Hand Over first (_handedOver), the same
+    // guard InteractObjectExecutor puts on its coffer prompt: without it, any unrelated Yes/No that
+    // happened to be up during the walk in would get a blind Yes. Only ever a confirmation of our
+    // own click.
+    private void DriveHandOver()
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastHandOver < DialogCooldownMs)
+            return;
+
+        if (DialogueMenu.HandOverRequest())
+        {
+            _lastHandOver = now;
+            _handedOver = true;
+            DebugLog.Info("Turn-in: handing over the requested items.");
+            return;
+        }
+        if (_handedOver && DialogueMenu.IsOpen("SelectYesno"))
+        {
+            _lastHandOver = now;
+            DialogueMenu.ConfirmYes();
+            DebugLog.Info("Turn-in: confirming the hand-over.");
+        }
     }
 
     // Take the relic out of both weapon slots so the turn-in UI can list it, recording the stage

@@ -161,7 +161,13 @@ public sealed class MeldNovusRouteExecutor : ITaskExecutor
     {
         if (_work.Count == 0)
         {
-            DebugLog.Warn("Novus route is empty (materia ids or prices unavailable). Open the Novus window to inspect.");
+            // An empty route also means "nothing left to meld", which is what a finished scroll looks
+            // like. The objective's own completion reads the scroll's counter, but that counter can
+            // only be recorded while the scroll's window is open -- so a scroll melded before this was
+            // ever read lands here. Say which it is rather than blaming the prices.
+            DebugLog.Warn(Novus.NovusScrollState.IsScrollFull(ctx.Config)
+                ? "Novus route is empty because the Sphere Scroll is already full. Nothing to meld; the run should be at the Jalzahn enhancement instead."
+                : "Novus route is empty. If the scroll is already melded, open its window once so the infused count can be read (then the run moves on to Jalzahn); otherwise the materia ids or prices are unavailable -- open the Novus window to inspect.");
             return ExecutorStatus.Failed;
         }
         if (_lineIndex >= _work.Count)
