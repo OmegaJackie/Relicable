@@ -17,9 +17,16 @@ namespace Relicable.External;
 // plugin that owns the rotation. See BossModRebornAvoidancePreset for why the previous
 // default ("VBM Multibox") was actively harmful.
 //
-// Not used when Backend == BossModReborn: there the combat preset
-// (BossModRebornCombatBackend) already includes avoidance, and CombatAssist skips this
-// path so the two do not clobber each other's active preset (SetActive is exclusive).
+// Not used when Backend == BossModReborn: SetActive is exclusive, so a second preset here
+// would evict the rotation. CombatAssist skips this path under that backend, and
+// BossModRebornRelicPreset.Build merges the same MiscAI.NormalMovement module into the
+// combat preset instead -- one preset, both jobs.
+//
+// WHAT AVOIDANCE ACTUALLY DOES IN AN ARR FATE (do not oversell it): BMR ships no encounter
+// module for ARR overworld content, so AIHintsBuilder takes its CalculateAutoHints branch and
+// the forbidden zones come only from enemy casts it can shape-guess live. There is no
+// telegraph database for FATE trash, so coverage is partial by construction -- the module
+// sidesteps what BMR can infer, not everything on the ground.
 public sealed class BossModRebornIpc
 {
     private readonly BossModRebornPresetControl _control;

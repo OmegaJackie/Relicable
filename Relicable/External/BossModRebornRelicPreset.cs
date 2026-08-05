@@ -18,12 +18,29 @@ namespace Relicable.External;
 //   opening on a single manually-targeted enemy even while neutral. This is the same
 //   targeting Questionable's proven "Overworld" preset uses for neutral overworld mobs.
 //
-// ROTATION-ONLY (no movement, no AI target-selection):
-//   Only the per-job rotation modules are listed -- NO MiscAI.NormalMovement (which
-//   would have BMR pathfind and fight vnavmesh for movement) and NO Melee/Tank/
-//   Ranged AI modules. Relicable owns navigation everywhere (it walks to melee with the
-//   rotation off, then engages), so BMR must ONLY cast on the current target. This
-//   is why the backend keeps BMR's AI loop (/bmrai) off for the grind.
+// NO AI TARGET-SELECTION, ever:
+//   Only the per-job rotation modules are listed -- no Melee/Tank/Ranged AI modules and no
+//   MiscAI.AutoTarget. Relicable owns targeting everywhere, so BMR must ONLY cast on the
+//   current hard target. This is also why the backend keeps BMR's AI loop (/bmrai) off.
+//
+// MOVEMENT (MiscAI.NormalMovement) IS OPTIONAL AND OFF BY DEFAULT IN THE JSON:
+//   Build(withAvoidance) appends the same movement module the RSR/Wrath backends get via
+//   BossModRebornAvoidancePreset. This is the ONLY way the "Use BossMod Reborn AoE avoidance"
+//   checkbox can do anything under this backend: BossMod.Presets.SetActive is EXCLUSIVE, so
+//   activating a second avoidance preset would evict this rotation preset and the character
+//   would dodge but never attack. Merging the module into this preset is the merge that
+//   exclusivity forces. Before this, the checkbox was inert under the default backend and
+//   nothing ever wrote AIHints.ForcedMovement -- i.e. avoidance was never active at all.
+//
+//   The old objection here ("NormalMovement would fight vnavmesh") does not hold: BMR's
+//   MovementOverride.RMIWalkDetour injects only while nothing else supplies movement input AND
+//   the Dalamud shared flag "vnav.PathIsRunning" is false, so it stands down entirely during
+//   navigation. See BossModRebornAvoidancePreset for the full track-by-track rationale.
+//
+//   Caveat worth knowing: under THIS backend (unlike RSR/Wrath) the job modules live in the
+//   same preset and therefore read the MaxCastTime / ForceCancelCast hints NormalMovement
+//   writes, so a caster may hold or drop a cast it thinks a mechanic would interrupt. Untick
+//   the checkbox to drop the module again -- the backend re-installs on the next step start.
 //
 // Installed via BossMod.Presets.Create (idempotent, overwrite) and activated by name via
 // BossMod.Presets.SetActive; BMR keeps the "BossMod." IPC prefix and the same bare
@@ -37,15 +54,35 @@ internal static class BossModRebornRelicPreset
     // user-made preset, and overwrite-on-create only ever replaces our own.
     public const string Name = "Relicable Combat";
 
-    // Bare preset JSON for BossMod.Presets.Create (BMR's gate). Every job's Targeting is
-    // "Manual" so the rotation casts on Relicable's hard target (including a neutral note
-    // mob). WAR uses the VeynWAR module (its AOE track auto-finishes combos), matching the
-    // reference preset; both VeynWAR and the xan modules exist in BMR under the same
-    // full type names.
-    public const string Json = """
-{
-  "Name": "Relicable Combat",
-  "Modules": {
+    // Bare preset JSON for BossMod.Presets.Create (BMR's gate), with the movement module
+    // appended when the user has AoE avoidance on. Assembled rather than a single const so the
+    // checkbox can add or drop MiscAI.NormalMovement without a second (mutually exclusive)
+    // preset -- see the class note.
+    public static string Build(bool withAvoidance)
+        => "{\n  \"Name\": \"" + Name + "\",\n  \"Modules\": {\n"
+           + RotationModules
+           + (withAvoidance ? ",\n" + AvoidanceModule : string.Empty)
+           + "\n  }\n}";
+
+    // The movement module, byte-identical to the one in BossModRebornAvoidancePreset (all six
+    // tracks listed explicitly -- an unlisted track deserializes to the FIRST enum member, and
+    // Destination's first member is "None", which makes Execute return having written nothing).
+    private const string AvoidanceModule = """
+    "BossMod.Autorotation.MiscAI.NormalMovement": [
+      { "Track": "Destination", "Option": "Pathfind" },
+      { "Track": "Range", "Option": "Any" },
+      { "Track": "Cast", "Option": "Leeway" },
+      { "Track": "SpecialModes", "Option": "Automatic" },
+      { "Track": "ForbiddenZoneCushion", "Option": "None" },
+      { "Track": "DelayMovement", "Option": "None" }
+    ]
+""";
+
+    // Every job's Targeting is "Manual" so the rotation casts on Relicable's hard target
+    // (including a neutral note mob). WAR uses the VeynWAR module (its AOE track auto-finishes
+    // combos), matching the reference preset; both VeynWAR and the xan modules exist in BMR
+    // under the same full type names. No trailing comma -- Build appends one when it needs to.
+    private const string RotationModules = """
     "BossMod.Autorotation.xan.PLD": [
       { "Track": "Buffs", "Option": "Automatic" },
       { "Track": "AOE", "Option": "AOE" },
@@ -147,7 +184,5 @@ internal static class BossModRebornRelicPreset
       { "Track": "Targeting", "Option": "Manual" },
       { "Track": "Motifs", "Option": "Downtime" }
     ]
-  }
-}
 """;
 }

@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.5.9.1 — Avoidance survived exactly one pull
+
+### Fixed
+
+- **AoE avoidance stopped working after the first fight of every step, which in a FATE means it
+  was never on.** Relicable hands BossMod Reborn its avoidance preset with `Presets.SetActive`,
+  and re-sends it only when the *name changes* — sending the same name every tick would thrash it.
+  But BossMod Reborn takes that slot back on its own: its `ClearPresetOnCombatEnd` and
+  `ClearPresetOnDeath` settings null the active preset whenever combat drops or you die. Relicable
+  never saw the clear, so the name it wanted was still the name it last sent, and it never sent it
+  again.
+
+  In a FATE combat ends between every wave, so avoidance lasted one pull and was gone for the rest
+  of the step. The same latch drives the *rotation* preset under the BossMod Reborn backend, so a
+  mid-fight death quietly ended the rotation too.
+
+  Relicable now re-checks the slot every two seconds while engaged and puts its preset back when
+  it finds it **empty**. A different preset is left alone — switching by hand mid-run still wins.
+  A preset name BossMod Reborn does not have is latched after the first refusal instead of being
+  retried (and re-warned) every two seconds.
+
+- **The "Use BossMod Reborn AoE avoidance" checkbox did nothing at all under the BossMod Reborn
+  backend**, which is the default. Only one preset can be active at a time, so a separate avoidance
+  preset would have evicted the rotation — and the built-in combat preset had no movement module in
+  it. The result was a ticked box that could not dodge anything.
+
+  The movement module is now merged into the combat preset itself when the box is ticked, so one
+  preset does both. Unticking it removes the module again from the next step onwards.
+
+### Changed
+
+- **The avoidance and combat preset boxes are now dropdowns** listing the presets you actually have
+  in BossMod Reborn, instead of a name you had to type exactly. The first entry is always
+  Relicable's own built-in preset. BossMod Reborn hides its stock presets when you have asked it to,
+  and the list honours that. A configured preset that has since been deleted stays visible and
+  selected, marked "(not found)", so opening the list cannot silently discard it. If BossMod Reborn
+  is not installed the plain text box is shown as before.
+
+- **Honest wording about what avoidance can do in a FATE.** BossMod Reborn has no scripted
+  timelines for ARR overworld content, so out there it can only sidestep what it infers from an
+  enemy's live cast. The setting now says so rather than implying full coverage.
+
 ## 1.5.9.0 — Braves work needs a Braves-ready weapon, not just a Braves quest
 
 ### Fixed

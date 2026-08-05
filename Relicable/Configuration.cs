@@ -70,10 +70,9 @@ public sealed class Configuration : IPluginConfiguration
     }
 
     // Combat. Defaults to BossMod Reborn so a FRESH install does not require Rotation Solver
-    // Reborn: BossMod Reborn already drives AoE avoidance by default
-    // (UseBossModRebornAvoidance), and under this backend it also drives the rotation via
-    // Relicable's shipped preset, so the only combat plugin a new user needs is BossMod
-    // Reborn. Switch to RotationSolverReborn to use RSR instead (RSR then becomes the
+    // Reborn: under this backend BossMod Reborn drives the rotation via Relicable's shipped
+    // preset AND (when UseBossModRebornAvoidance is on) the AoE avoidance merged into that
+    // same preset, so the only combat plugin a new user needs is BossMod Reborn. Switch to RotationSolverReborn to use RSR instead (RSR then becomes the
     // required combat plugin). NOTE: an existing config that already saved a Backend value
     // keeps it -- change it in /relic config > Settings > Combat backend.
     public CombatBackend Backend { get; set; } = CombatBackend.BossModReborn;
@@ -508,16 +507,22 @@ public sealed class Configuration : IPluginConfiguration
     // Combat assist
     public bool AutoSummonChocobo { get; set; } = true;
     public bool ChocoboHealerStance { get; set; } = true;
+    // Applies under EVERY backend, but by two different mechanisms, because
+    // BossMod.Presets.SetActive is exclusive:
+    //   Backend != BossModReborn -> BossModRebornIpc activates a separate avoidance preset.
+    //   Backend == BossModReborn -> BossModRebornRelicPreset.Build merges the same
+    //                               MiscAI.NormalMovement module into the combat preset.
     public bool UseBossModRebornAvoidance { get; set; } = true;
+
     // Name of a BossMod Reborn autorotation preset configured for AoE avoidance, activated
     // via BossMod.Presets.SetActive (BMR keeps the "BossMod." IPC prefix). The preset must
-    // exist in BMR (create one named exactly this and set its strategy tracks to
-    // avoidance-only so it does not run the rotation and fight RSR). Default is BMR's
-    // built-in AI preset "VBM Multibox"; empty disables BMR control.
-    // Only used when Backend != BossModReborn. Under the BossMod Reborn backend this
-    // separate avoidance preset is not activated, because SetActive is exclusive and would
-    // clobber the combat rotation preset (that backend keeps vnavmesh in control of
-    // movement instead).
+    // exist in BMR (create one named exactly this, movement-only so it does not run a
+    // rotation and fight RSR). EMPTY (the default) means "use Relicable's own shipped
+    // BossModRebornAvoidancePreset", which is auto-installed -- it is not "off"; the toggle
+    // above is the off switch.
+    //
+    // This NAME is only read when Backend != BossModReborn. Under the BossMod Reborn backend
+    // there is no second preset to name (see above), so the field is hidden there.
     public string BossModRebornAvoidancePreset { get; set; } = string.Empty;
 
     // One-time migration marker for the avoidance-preset default. Builds up to 1.5.1.0

@@ -93,6 +93,10 @@ public sealed class BossModRebornCombatBackend : ICombatBackend
         _control.Resync();
         _aiSent = null;         // force the next Enable/Disable to re-send the AI-off state
         _resolvedPreset = null; // re-resolve the preset name (the config may have changed)
+        // Re-install too: the preset's CONTENTS now depend on UseBossModRebornAvoidance, so
+        // without this the avoidance checkbox stayed inert until a plugin reload. Resync runs at
+        // each step start, not per tick, so this is one Presets.Create per step at most.
+        _installed = false;
     }
 
     // Activate the rotation preset and set BMR's AI loop for the current mode. The preset is
@@ -141,7 +145,11 @@ public sealed class BossModRebornCombatBackend : ICombatBackend
         try
         {
             var existed = _getPreset.InvokeFunc(BossModRebornRelicPreset.Name) != null;
-            _createPreset.InvokeFunc(BossModRebornRelicPreset.Json, true);
+            // The movement module rides along in THIS preset when avoidance is on: SetActive is
+            // exclusive, so a separate avoidance preset would evict the rotation (which is why
+            // CombatAssist never calls EnableAvoidance under this backend).
+            _createPreset.InvokeFunc(
+                BossModRebornRelicPreset.Build(_config.UseBossModRebornAvoidance), true);
             Diagnostics.DebugLog.Info(existed
                 ? $"BossMod Reborn: refreshed rotation preset '{BossModRebornRelicPreset.Name}'"
                 : $"BossMod Reborn: installed rotation preset '{BossModRebornRelicPreset.Name}'");
