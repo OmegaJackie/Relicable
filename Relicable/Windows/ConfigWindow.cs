@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Plugin;
 using Dalamud.Utility;
@@ -25,6 +27,10 @@ public sealed class ConfigWindow : Window
     private readonly DependencyRegistry _dependencies;
     private readonly External.IfritBurstRotationSwap _burstRotationSwap;
 
+    // Names for the two BossMod Reborn preset dropdowns. Scraped from BMR's own preset files
+    // because its IPC has no enumerate gate -- see BossModPresetCatalog.
+    private readonly BossModPresetCatalog _presets;
+
     // Save-on-change (debounced): previously nothing persisted unless the Save button
     // was pressed, so toggles applied live silently reverted on reload -- and the
     // sibling windows (Novus/Braves) already save their shared settings on change.
@@ -42,7 +48,11 @@ public sealed class ConfigWindow : Window
         _pi = pi;
         _dependencies = dependencies;
         _burstRotationSwap = burstRotationSwap;
+        _presets = new BossModPresetCatalog(pi);
     }
+
+    // Pick up presets created in BossMod Reborn since the last time this window was open.
+    public override void OnOpen() => _presets.Refresh();
 
     // Flush a pending debounced save if the window closes mid-edit, so nothing is lost.
     public override void OnClose()
@@ -138,18 +148,14 @@ public sealed class ConfigWindow : Window
         if (_config.Backend == Configuration.CombatBackend.BossModReborn)
         {
             Ui.Note("BossMod Reborn drives the rotation; Rotation Solver is not required. Relicable installs and uses " +
-                "its own \"" + BossModRebornRelicPreset.Name + "\" preset by default — leave the field below blank.");
-            var combatPreset = _config.BossModRebornCombatPreset;
-            if (ImGui.InputText("Combat preset (blank = built-in)", ref combatPreset, 64))
-            {
-                _config.BossModRebornCombatPreset = combatPreset;
-                _dirty = true;
-            }
-            Ui.Tooltip("Leave blank (recommended): Relicable's built-in rotation-only preset makes BossMod Reborn " +
-                "attack the current hard target, including neutral book enemies.\n\n" +
-                "Only name a preset if you built a rotation-only one yourself (Targeting set to Manual, " +
-                "no AI or movement modules). AI presets such as 'VBM Multibox' pick their own targets " +
-                "and skip neutral enemies.");
+                "its own \"" + BossModRebornRelicPreset.Name + "\" preset by default — leave the field below on Built-in.");
+            PresetCombo("Combat preset", BossModRebornRelicPreset.Name,
+                _config.BossModRebornCombatPreset, v => _config.BossModRebornCombatPreset = v,
+                "Leave on Built-in (recommended): Relicable's own rotation preset makes BossMod Reborn " +
+                "attack the current hard target, including neutral book enemies — and it is the preset the " +
+                "AoE avoidance setting below is merged into.\n\n" +
+                "Only pick another preset if you built a rotation-only one yourself (Targeting set to Manual). " +
+                "AI presets such as 'VBM Multibox' pick their own targets and skip neutral enemies.");
 
             // Guard the exact misconfiguration that stops the BossMod Reborn backend attacking neutral
             // relic mobs during the beastmen hunt: pointing the COMBAT preset at an AI/movement
@@ -315,33 +321,47 @@ public sealed class ConfigWindow : Window
         Checkbox("Auto-summon chocobo", _config.AutoSummonChocobo, v => _config.AutoSummonChocobo = v);
         Checkbox("Set chocobo to healer stance", _config.ChocoboHealerStance, v => _config.ChocoboHealerStance = v);
         Checkbox("Use BossMod Reborn AoE avoidance", _config.UseBossModRebornAvoidance, v => _config.UseBossModRebornAvoidance = v);
-        var preset = _config.BossModRebornAvoidancePreset;
-        if (ImGui.InputText("Avoidance preset (blank = built-in)", ref preset, 64))
+        // The preset NAME only exists under the other backends. Under BossMod Reborn there is no
+        // second preset to name: SetActive is exclusive, so the same movement module is merged
+        // into the combat preset above instead, and the checkbox alone drives it.
+        if (_config.Backend == Configuration.CombatBackend.BossModReborn)
+            Ui.Note("Under the BossMod Reborn backend the avoidance movement is merged into the combat " +
+                "preset above, because only one preset can be active at a time. Pick the combat preset there.");
+        else
         {
-            _config.BossModRebornAvoidancePreset = preset;
-            _dirty = true;
-        }
-        Ui.Tooltip("Leave blank (recommended): Relicable installs and uses its own \"" +
-            BossModRebornAvoidancePreset.Name + "\" preset, which contains movement only — it dodges " +
-            "AoE without ever touching your target.\n\n" +
-            "Only name a preset if you built a movement-only one yourself. Do NOT name an AI preset " +
-            "such as 'VBM Multibox': those include AutoTarget, which overwrites your target every " +
-            "frame and fights whichever plugin is running your rotation.");
+            PresetCombo("Avoidance preset", BossModRebornAvoidancePreset.Name,
+                _config.BossModRebornAvoidancePreset, v => _config.BossModRebornAvoidancePreset = v,
+                "Leave on Built-in (recommended): Relicable installs and uses its own \"" +
+                BossModRebornAvoidancePreset.Name + "\" preset, which contains movement only — it dodges " +
+                "AoE without ever touching your target.\n\n" +
+                "Only pick another preset if you built a movement-only one yourself. Do NOT pick an AI " +
+                "preset such as 'VBM Multibox': those include AutoTarget, which overwrites your target " +
+                "every frame and fights whichever plugin is running your rotation.");
 
-        // The exact misconfiguration this field shipped as its own default until 1.5.2.0.
-        // AutoTarget writes TargetSystem->Target every frame, so under the RSR and Wrath
-        // backends it takes the hard target away from the plugin that owns the rotation.
-        if (LooksLikeAiPreset(_config.BossModRebornAvoidancePreset))
-            Ui.Wrapped(Red,
-                "This looks like an AI/movement preset. It will overwrite your target every frame and " +
-                "fight your combat plugin for control. Clear the field to use Relicable's built-in " +
-                "avoidance preset instead.");
+            // The exact misconfiguration this field shipped as its own default until 1.5.2.0.
+            // AutoTarget writes TargetSystem->Target every frame, so under the RSR and Wrath
+            // backends it takes the hard target away from the plugin that owns the rotation.
+            if (LooksLikeAiPreset(_config.BossModRebornAvoidancePreset))
+                Ui.Wrapped(Red,
+                    "This looks like an AI/movement preset. It will overwrite your target every frame and " +
+                    "fight your combat plugin for control. Choose Built-in to use Relicable's own " +
+                    "avoidance preset instead.");
+
+            // New hazard the dropdown creates: the rotation preset is now one click away in a field
+            // that never validates what it is handed (EnableAvoidance passes the name straight to
+            // SetActive, unlike the combat path, which probes Presets.Get first).
+            if (string.Equals(_config.BossModRebornAvoidancePreset, BossModRebornRelicPreset.Name,
+                    StringComparison.OrdinalIgnoreCase))
+                Ui.Wrapped(Red,
+                    "This is Relicable's rotation preset — it contains no movement, so you would get no " +
+                    "avoidance at all. Choose Built-in.");
+        }
 
         Ui.Note("Avoidance only acts while you are standing still, and steps aside for vnavmesh while " +
-            "it is moving you — so it dodges between navigation legs, not during travel.");
-
-        if (_config.Backend == Configuration.CombatBackend.BossModReborn)
-            ImGui.TextDisabled("(Not used under the BossMod Reborn backend: it would clobber the rotation preset.)");
+            "it is moving you — so it dodges between navigation legs, not during travel.\n\n" +
+            "BossMod Reborn ships no scripted timelines for ARR overworld content, so in FATEs it can " +
+            "only sidestep what it infers from an enemy's live cast. Expect partial coverage, not a " +
+            "clean dodge of everything.");
 
         ImGui.Separator();
         ImGui.TextDisabled("Farming");
@@ -829,6 +849,82 @@ public sealed class ConfigWindow : Window
         ImGui.SameLine();
         if (ImGui.SmallButton($"Copy repo##{dep.Name}"))
             ImGui.SetClipboardText(dep.RepoUrl);
+    }
+
+    // Preset chooser shared by the combat and avoidance fields.
+    //
+    // BossMod Reborn exposes no "list presets" IPC (Get/Create/Delete/SetActive/ClearActive/
+    // GetActive and the transient gates -- Get can only confirm a name you already know), so the
+    // names come from BossModPresetCatalog, which reads BMR's own preset files. When it finds
+    // nothing -- BMR not installed, an unexpected layout, an unreadable file -- this degrades to
+    // the free-text box these fields used before. An empty dropdown would be a dead end that
+    // could not even preserve what the user already had.
+    //
+    // The first row is always "Built-in", mapping to the EMPTY string, and that is load-bearing
+    // rather than cosmetic: empty is the only value that makes the wrappers install/refresh
+    // Relicable's own shipped preset (BossModRebornIpc.EnableAvoidance returns early on any
+    // non-empty name, and BossModRebornCombatBackend.ResolvePreset branches the same way).
+    // Picking a row literally named "Relicable Avoidance" would activate the same preset but
+    // skip the install, so the shipped name is folded into the built-in row instead of listed
+    // twice.
+    //
+    // The hover text is passed in rather than written by the caller: ImGui tooltips attach to the
+    // LAST submitted item, and this draws a Refresh button after the combo, so a Ui.Tooltip at the
+    // call site would silently land on that button instead of the field it describes.
+    private void PresetCombo(string label, string builtInName, string current, Action<string> set,
+        string tooltip)
+    {
+        _presets.EnsureFresh();
+        current ??= string.Empty;
+        var builtInLabel = $"Built-in ({builtInName})";
+
+        if (!_presets.Available)
+        {
+            var typed = current;
+            if (ImGui.InputText($"{label} (blank = built-in)", ref typed, 64))
+            {
+                set(typed);
+                _dirty = true;
+            }
+            Ui.Tooltip(tooltip);
+            return;
+        }
+
+        ImGui.SetNextItemWidth(230f);
+        if (ImGui.BeginCombo(label, current.Length == 0 ? builtInLabel : current))
+        {
+            if (ImGui.Selectable(builtInLabel, current.Length == 0))
+            {
+                set(string.Empty);
+                _dirty = true;
+            }
+
+            // A configured name BMR no longer has stays listed and selected: merely OPENING the
+            // combo must not silently discard a setting (the preset may be in a profile the user
+            // has not loaded yet, or BMR may simply be mid-save).
+            if (current.Length > 0 && !_presets.Names.Contains(current, StringComparer.OrdinalIgnoreCase))
+                ImGui.Selectable($"{current}  (not found)", true);
+
+            foreach (var name in _presets.Names)
+            {
+                if (name.Equals(builtInName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (ImGui.Selectable(name, name.Equals(current, StringComparison.OrdinalIgnoreCase)))
+                {
+                    set(name);
+                    _dirty = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
+        // Anchored to the combo, before the Refresh button is submitted.
+        Ui.Tooltip(tooltip);
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton($"Refresh##{label}"))
+            _presets.Refresh();
+        Ui.Tooltip("Re-read BossMod Reborn's preset list. Use this if you created a preset in BossMod " +
+            "Reborn while this window was open.");
     }
 
     // Auto-properties cannot be passed to ImGui.Checkbox by ref, so use a local

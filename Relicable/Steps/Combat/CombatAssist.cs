@@ -10,11 +10,12 @@ namespace Relicable.Steps.Combat;
 // BossMod Reborn a separate avoidance preset so it dodges AoEs while RSR runs the
 // rotation.
 //
-// When BossMod Reborn IS the combat backend, its rotation-only combat preset owns the
-// (exclusive) active-preset slot, so activating a second avoidance preset here would
-// clobber the rotation -- hence the backend guard. Note this means the BossMod Reborn
-// backend does not add AoE avoidance (avoidance needs movement control, which vnavmesh
-// owns); that is an accepted trade for the trivial ARR relic content.
+// When BossMod Reborn IS the combat backend, its combat preset owns the (exclusive)
+// active-preset slot, so activating a second avoidance preset here would clobber the
+// rotation -- hence the backend guard. That backend still honours the avoidance setting:
+// BossModRebornRelicPreset.Build MERGES the same MiscAI.NormalMovement module into the
+// combat preset instead. Do not "fix" this guard by calling EnableAvoidance under that
+// backend; SetActive is exclusive and the character would dodge but never attack.
 internal static class CombatAssist
 {
     private static bool BossModRebornIsBackend(ExecutionContext ctx)

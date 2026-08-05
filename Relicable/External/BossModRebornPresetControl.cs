@@ -19,7 +19,9 @@ namespace Relicable.External;
 // (BossModRebornCombatBackend, used under the BossMod Reborn backend). Only one is ever
 // active at a time because the combat-backend selection gates which path runs, and
 // SetActive is exclusive, so activating one implicitly clears the other. Edge-triggered
-// so re-activating the same preset every tick is a no-op.
+// so re-activating the same preset every tick is a no-op -- with a throttled reconcile
+// (see Reconcile) that re-arms the latch when BMR empties the slot itself, because a pure
+// edge trigger cannot recover from a clear it never observed.
 internal sealed class BossModRebornPresetControl
 {
     private readonly ICallGateSubscriber<string, bool>? _setActive;
@@ -31,6 +33,23 @@ internal sealed class BossModRebornPresetControl
     // The preset name THIS control last activated, so Clear never deactivates a preset
     // the user picked by hand.
     private string _lastActivated = string.Empty;
+
+    // How often Reconcile is allowed to read BMR's active preset. Activate is level-triggered
+    // by the executors (every tick, from six call sites), so an unthrottled GetActive would be
+    // a per-frame IPC round trip for no benefit.
+    private const long ReconcileIntervalMs = 2000;
+    private const int ReconcileHintAfter = 5;
+    private long _reconciledAt;
+
+    // A preset name SetActive has already REJECTED (no preset by that name exists in BMR).
+    // Without this latch the reconcile below re-sends it every 2s for the whole step and the
+    // four-line warning in Send floods the log. Cleared by Resync -- the user may have created
+    // the preset since.
+    private string _rejected = string.Empty;
+
+    // Consecutive reconciles that found the slot empty again, so the "something else keeps
+    // taking this slot" hint is logged once instead of every two seconds.
+    private int _reconciles;
 
     public BossModRebornPresetControl(IDalamudPluginInterface pi, string label)
     {
@@ -47,8 +66,59 @@ internal sealed class BossModRebornPresetControl
     // Activate the named preset. No-op if the name is empty (nothing configured).
     public void Activate(string presetName)
     {
-        if (!string.IsNullOrEmpty(presetName))
-            _preset.Dispatch(presetName);
+        if (string.IsNullOrEmpty(presetName))
+            return;
+        Reconcile(presetName);
+        _preset.Dispatch(presetName);
+    }
+
+    // Re-arm the edge latch when BMR has VACATED the active-preset slot behind our back.
+    //
+    // THIS IS WHY AVOIDANCE DIED IN FATES. BMR's own AutorotationConfig has
+    // ClearPresetOnCombatEnd and ClearPresetOnDeath, and BMR nulls its active preset whenever
+    // either fires (on death it assigns ForceDisable = new Preset(""), so GetActive reads back
+    // as an empty string rather than null -- both are handled here). Activate is called every
+    // tick by the executors, but EdgeTrigger only invokes on a CHANGE: once "Relicable Avoidance"
+    // had been dispatched, every later Activate compared equal and returned without sending, so
+    // nothing ever put the preset back. Inside a FATE combat drops between every wave, so
+    // avoidance survived exactly one pull and was gone for the rest of the step -- the reported
+    // "AoE avoidance isn't activating on FATEs". The same latch governs the COMBAT preset, so a
+    // mid-fight death silently ended the rotation too.
+    //
+    // Only an EMPTY slot is reclaimed. A different, non-empty preset means the user (or another
+    // plugin) deliberately switched, and we must not fight them for it -- the same rule the clear
+    // arm in Send already follows. And only when WE are the ones who put a preset there
+    // (_lastActivated non-empty), so a never-successful SetActive cannot spin here.
+    private void Reconcile(string presetName)
+    {
+        // Older BMR without the read gate: no way to tell, so keep the plain edge behaviour.
+        if (_getActive is not { HasFunction: true })
+            return;
+        if (string.Equals(_rejected, presetName, StringComparison.Ordinal))
+            return;
+
+        var now = Environment.TickCount64;
+        if (now - _reconciledAt < ReconcileIntervalMs)
+            return;
+        _reconciledAt = now;
+
+        var active = TryGetActive();
+        if (!string.IsNullOrEmpty(active))
+        {
+            _reconciles = 0;
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_lastActivated))
+            return;
+
+        _preset.Reset();
+        if (++_reconciles == ReconcileHintAfter)
+            Diagnostics.DebugLog.Info(
+                $"BMR {_label} preset '{presetName}' keeps being cleared by BossMod Reborn; Relicable is " +
+                "re-applying it. That is BMR's own ClearPresetOnCombatEnd / ClearPresetOnDeath setting, or " +
+                "its AI loop (which reassigns the active preset every frame -- turn it off with /bmrai off). " +
+                "This is a note, not an error.");
     }
 
     // Clear whatever we activated.
@@ -56,7 +126,13 @@ internal sealed class BossModRebornPresetControl
 
     // Force the next Activate/Clear to re-send (e.g. BMR changed the active preset
     // itself, or we left a duty).
-    public void Resync() => _preset.Reset();
+    public void Resync()
+    {
+        _rejected = string.Empty;
+        _reconciles = 0;
+        _reconciledAt = 0;
+        _preset.Reset();
+    }
 
     private void Send(string presetName)
     {
@@ -99,13 +175,18 @@ internal sealed class BossModRebornPresetControl
             if (ok)
             {
                 _lastActivated = presetName;
+                _rejected = string.Empty;
                 Diagnostics.DebugLog.Verbose($"BMR {_label} preset -> '{presetName}'");
             }
             else
+            {
+                // Latch the rejection so Reconcile stops re-sending a name BMR does not have.
+                _rejected = presetName;
                 Diagnostics.DebugLog.Warn(
                     $"BossMod Reborn -> SetActive('{presetName}') returned false: no preset by that name " +
                     $"exists. Create a preset with this exact name (the {_label} preset in Relicable config) " +
                     "or clear the setting; BossMod Reborn is not engaged until the name matches.");
+            }
         }
         catch { /* unavailable */ }
     }
