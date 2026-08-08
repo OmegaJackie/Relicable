@@ -288,6 +288,7 @@ public sealed class RelicController
         _bravesAcceptFailed.Clear();
         _bravesFetchTried = false;
         _bravesDoneLogged = false;
+        _bravesDeliveredLogged.Clear();
         DebugLog.Info("Start: entering SelectStage");
         return true;
     }
@@ -1008,7 +1009,9 @@ public sealed class RelicController
                     }
                     else
                     {
-                        StopWith(AnyBravesMaterialQuestAccepted()
+                        StopWith(AllBravesQuestsDelivered()
+                            ? BravesFinisherGuidance
+                            : AnyBravesMaterialQuestAccepted()
                             ? "Braves: no dungeon item is being requested right now across your accepted material " +
                               "quest(s) -- the current step's drops are obtained, or the next batch is not requested " +
                               "yet. Gather the vendor/crafted items and turn in what you have; the engine resumes when " +
@@ -1074,7 +1077,9 @@ public sealed class RelicController
                     }
                     else
                     {
-                        StopWith(AnyBravesMaterialQuestAccepted()
+                        StopWith(AllBravesQuestsDelivered()
+                            ? BravesFinisherGuidance
+                            : AnyBravesMaterialQuestAccepted()
                             ? "Braves: no dungeon item is being requested right now across your accepted material " +
                               "quest(s) (the current step's drops are obtained, or the next batch is not requested yet). " +
                               "Turn in what you have; the engine resumes when a quest asks for the next dungeon items." +
@@ -1275,6 +1280,13 @@ public sealed class RelicController
         // trip is neither a dungeon nor unrequested.)
         if (o.Completion.Kind == CompletionKind.BravesQuestAccepted)
             return true;
+        // The quest is already delivered for this weapon (reward item banked): none of its dungeons
+        // are wanted, even if the quest sits accepted again at a matching sequence. Without this a
+        // re-accepted 'Method in His Malice' (whose first drop is requested at sequence 1, i.e.
+        // straight from the accept) would send the run back through The Wanderer's Palace for a
+        // quest that has nothing left to gain from it.
+        if (Data.BravesData.QuestDelivered(o.BravesQuest))
+            return false;
         var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(o.BravesQuest));
         if (seq <= 0)
             return false; // this drop's material quest is not accepted
@@ -1372,6 +1384,25 @@ public sealed class RelicController
         return false;
     }
 
+    // All four rewards banked -> the only stage work left is the finisher, which is not automated;
+    // the stop must say exactly that instead of "gather materials" for quests that are finished.
+    private static bool AllBravesQuestsDelivered()
+    {
+        foreach (var name in Data.BravesData.MaterialQuests)
+            if (!Data.BravesData.QuestDelivered(name))
+                return false;
+        return true;
+    }
+
+    // The stop guidance for a stage whose four material quests are all delivered. Gerolt's spot is
+    // the authored 'His Dark Materia' bookend (ENpc 1003075, Hyrstmill -- see
+    // tools/generated/questpaths_stages/361_His Dark Materia.json).
+    private const string BravesFinisherGuidance =
+        "Braves: all four material quests are delivered for this weapon -- the Book of Skylight, " +
+        "Zodium, Zodiac Scroll and Flawless Alexandrite are in your bags. Complete 'His Dark " +
+        "Materia' at Gerolt (Hyrstmill, North Shroud) to receive the Zodiac weapon (a repeat " +
+        "weapon uses Jalzahn's 'Zodiac Weapon Recreation' instead), then /relic start.";
+
     // "Who / where to report to" for each accepted material quest, appended to the "no dungeon
     // requested" guidance so the player knows exactly which NPC advances/turns in each quest (its
     // batch is done or the next batch needs its non-dungeon items first). Empty when none accepted.
@@ -1383,6 +1414,8 @@ public sealed class RelicController
             var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
             if (seq <= 0)
                 continue; // only quests currently accepted
+            if (Data.BravesData.QuestDelivered(name))
+                continue; // delivered for this weapon; only a stray accepted copy remains
             // Sequence-aware: who advances a quest depends on where it is (A Treasured Mother reports
             // to Ealdwine at Swiftperch between batches, Brangwine only for the final turn-in).
             var (npc, _, _, _, where) = Data.BravesData.TurnInNpc(name, seq);
@@ -1475,6 +1508,13 @@ public sealed class RelicController
         {
             if (Steps.BravesAcceptExecutor.IsInHand(quest))
                 continue;
+            // Already DELIVERED for the weapon in progress (its reward item is banked -- see
+            // BravesData.QuestDelivered): never re-accept it. IsInHand cannot catch this, because
+            // the four material quests are repeatable: the moment one completes it reads sequence 0,
+            // exactly like "never accepted", and the engine marched straight back to the giver
+            // (reported live: 'A Ponze of Flesh' finished and immediately picked up again).
+            if (Data.BravesData.QuestDelivered(quest))
+                continue;
             // Gated behind another quest (only A Treasured Mother is, behind "One Man's Trash"): the
             // giver would have nothing to offer, so skip it and keep working the others. The stop
             // guidance names it rather than letting it look like the engine forgot the quest.
@@ -1504,6 +1544,10 @@ public sealed class RelicController
         return null;
     }
 
+    // Delivered-but-still-accepted quests already named in the log this run, so the "ignoring it"
+    // notice appears once rather than on every selection pass. Cleared by Start.
+    private readonly HashSet<string> _bravesDeliveredLogged = new(StringComparer.OrdinalIgnoreCase);
+
     private RelicObjective? TrySelectBravesReport()
     {
         foreach (var name in Data.BravesData.MaterialQuests)
@@ -1511,6 +1555,18 @@ public sealed class RelicController
             var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
             if (seq <= 0)
                 continue; // not accepted
+            // Delivered for this weapon (reward item banked), yet ACCEPTED again -- a pre-fix
+            // re-accept, or taken by hand. There is nothing left to hand over on it, so a report
+            // trip could only end in "the dialogue ended but the quest did not advance" (the
+            // reported Papana loop). Ignore it; the accepted copy simply waits for the next weapon.
+            if (Data.BravesData.QuestDelivered(name))
+            {
+                if (_bravesDeliveredLogged.Add(name))
+                    DebugLog.Info($"Braves: '{name}' is already delivered for this weapon " +
+                                  $"({Data.BravesData.RewardItemName(name)} in hand); ignoring the accepted copy. " +
+                                  "It will serve the next weapon, or abandon it in the journal.");
+                continue;
+            }
             if (Data.BravesData.TurnInNpc(name, seq).DataId == 0)
                 continue; // NPC did not resolve
             // Report whenever the quest has no dungeon drop left to FARM at its current sequence -- i.e.

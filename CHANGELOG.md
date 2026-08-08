@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.9.2 — A finished Braves quest stays finished
+
+### Fixed
+
+- **Completing a Braves material quest re-accepted it on the spot, then looped on a report it could
+  not advance.** Reported live: 'A Ponze of Flesh' turned in, immediately picked up again, and the
+  run parked on "report to Papana" while the fresh quest — sitting at its first step with the
+  vendor/crafted items already consumed — had nothing to hand over.
+
+  The four material quests are repeatable, so the moment one completes its sequence returns to 0
+  and it reads exactly like "never accepted" — and the existing guard (do you already hold a
+  finished Braves weapon?) only helps once the *whole stage* is done, which is four quests and a
+  finisher too late. Mid-stage, nothing testified that a quest was already delivered.
+
+  Something does, though: each quest's **reward item**. A Ponze of Flesh pays a Book of Skylight,
+  Labor of Love a Zodium, Method in His Malice a Zodiac Scroll and A Treasured Mother a Flawless
+  Alexandrite (verified against the game's quest sheet), and 'His Dark Materia' consumes all four
+  only at the very end of the stage. Holding one is proof its quest is delivered for the weapon in
+  progress — and it survives reloads, relogs and job changes.
+
+  All four quests now honour that witness everywhere the engine decides Braves work: a delivered
+  quest is never re-accepted, never chosen for an NPC report, and none of its dungeons are run —
+  even if a stray accepted copy is still sitting in the journal from before this fix (that copy is
+  ignored, named once in the log, and simply serves the next weapon). When all four rewards are
+  banked the run now says the real remaining step: complete 'His Dark Materia' at Gerolt
+  (Hyrstmill, North Shroud) — or Jalzahn's 'Zodiac Weapon Recreation' on a repeat weapon.
+
+- **The Braves shopping list re-demanded materials a finished quest had already eaten.** A
+  delivered quest's rows now count zero (and the stage-wide Bombard Core / Sacred Spring Water
+  rows shrink by one per delivered quest), so the totals, the window and the retainer auto-fetch
+  stop asking you to re-buy 100,000-gil items for quests that are done.
+
+- **The four reward items are protected from auto-discard**, alongside the other relic-line items:
+  losing one would both un-prove the quest and cost the whole set of materials it was traded for.
+
 ## 1.5.9.1 — Avoidance survived exactly one pull
 
 ### Fixed

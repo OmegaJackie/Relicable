@@ -357,6 +357,11 @@ public sealed class Plugin : IDalamudPlugin
             Add(NovusData.MysteriousMapItemId);
             Add(NovusData.AlexandriteMapItemId);
             Add(ZenithData.MistItemId);
+            // The four Braves quest rewards (Book of Skylight, Zodium, Zodiac Scroll, Flawless
+            // Alexandrite): each is the proof its material quest is delivered for the weapon in
+            // progress (BravesData.QuestDelivered), and the stage finisher consumes them.
+            foreach (var quest in BravesData.MaterialQuests)
+                Add(BravesData.RewardItemId(quest));
         }
         catch (Exception ex)
         {

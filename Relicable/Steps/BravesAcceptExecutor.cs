@@ -92,6 +92,14 @@ public sealed class BravesAcceptExecutor : ITaskExecutor
             return;
         }
 
+        // Already delivered for this weapon (reward item banked): re-accepting would restart a
+        // finished quest. The controller skips these; this covers a user-forced run.
+        if (BravesData.QuestDelivered(_quest))
+        {
+            _phase = Phase.Done;
+            return;
+        }
+
         // The quest or its giver did not resolve. This must FAIL, not complete: completing would leave
         // the quest still not in hand, the controller would re-select this very objective, and the pair
         // would spin instantly forever. Failing records it as un-acceptable and moves the stage on.

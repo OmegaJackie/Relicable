@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Lumina.Excel.Sheets;
@@ -108,6 +109,14 @@ public sealed class BravesPlanner
         int dungeon = 0, craft = 0, unpriced = 0, fetchable = 0;
         var ready = _universalis.State == UniversalisClient.FetchState.Loaded;
 
+        // A quest already DELIVERED for the weapon in progress (its reward item is banked -- see
+        // BravesData.QuestDelivered) consumes no more materials, so its rows must stop counting:
+        // otherwise the list (and the retainer auto-fetch that reads it) re-demands the very items
+        // the final turn-in just ate. Per-quest rows zero out when their quest is delivered; the
+        // stage-wide rows (Bombard Core / Sacred Spring Water, authored quantity 4 = one per quest)
+        // shrink by the delivered count instead.
+        var deliveredQuests = BravesData.DeliveredQuestCount();
+
         foreach (var m in BravesData.Materials)
         {
             var id = BravesData.ItemId(m.ItemName);
@@ -117,7 +126,10 @@ public sealed class BravesPlanner
             var have = id != 0 ? GameState.InventoryCount(id)
                      : keyId != 0 ? GameState.KeyItemCount(keyId)
                      : 0;
-            var need = m.Quantity - have;
+            var quantity = BravesData.MaterialQuests.Contains(m.Quest)
+                ? BravesData.QuestDelivered(m.Quest) ? 0 : m.Quantity
+                : Math.Max(0, m.Quantity - deliveredQuests);
+            var need = quantity - have;
             if (need < 0)
                 need = 0;
 
