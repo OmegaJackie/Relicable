@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Fates;
 using Relicable.BaseRelic;
@@ -243,6 +244,105 @@ public sealed class RelicController
         DebugLog.Info($"Reloaded {objectives.Count} objectives");
     }
 
+    // ---- Skip Step (Questionable-style), offered for the two Braves quest steps and nothing else ----
+    //
+    // Both of them decide they are finished by reading the QUEST out of game memory -- the accept
+    // completes when the quest is in hand, the report when its sequence changes -- and both drive an
+    // NPC that may simply have nothing to say. When that read disagrees with what you can see in your
+    // own journal, the run has no way out from the inside: the objective is selected again, the run
+    // travels back to the same NPC, and the conversation ends with nothing advanced (the reported
+    // Papana loop). This is the manual override for that.
+    //
+    // Deliberately these two only: every other step either completes on a game-state flag that cannot
+    // lie (an item held, a duty cleared, a gauge filled) or fails into the 3-strike backoff, so a
+    // general "skip anything" button would mostly be a way to desync the engine from the game.
+    private static bool IsSkippableStep(StepType type)
+        => type is StepType.AcceptBravesQuest or StepType.BravesReport;
+
+    public bool CanSkipCurrentStep
+        => _state == State.RunStep
+           && _objective is { } o
+           && _stepIndex < o.Steps.Count
+           && IsSkippableStep(o.Steps[_stepIndex].Type)
+           && QuestForStep(o.Steps[_stepIndex]).Length > 0;
+
+    // The Braves quest a step is for: carried on the step (an accept sweep has one per stop), with
+    // the objective's headline quest as the fallback for single-quest objectives.
+    private string QuestForStep(StepData step)
+        => string.IsNullOrEmpty(step.BravesQuest) ? _objective?.BravesQuest ?? string.Empty : step.BravesQuest;
+
+    // Objectives the player skipped by hand this SESSION (id -> the name to show), never selected
+    // again while the entry lasts. Unlike _bravesAcceptFailed, Start does NOT clear this: a failure is
+    // our inference and the player may have fixed what caused it, but a skip is the player's own
+    // answer, and they outrank a memory read that says otherwise. Not persisted, so a plugin reload
+    // (or a game restart) re-asks the question with a clean slate.
+    //
+    // Keyed by objective id, which is what makes a skip land at the right grain: an accept is
+    // "braves-accept-<quest>" (one per quest), a report is "braves-report-<quest>-<sequence>" (one per
+    // quest STEP), so waving off a report you cannot satisfy right now does not silence the next one.
+    private readonly Dictionary<string, string> _skippedObjectives = new(StringComparer.OrdinalIgnoreCase);
+
+    // Skip the running Braves step: stop the trip to the NPC, never select this objective again this
+    // session, and re-plan onto whatever else the stage has. Returns what happened, for the caller to
+    // show. A skip is NOT a failure, so it leaves the backoff counter alone.
+    public string SkipCurrentStep()
+    {
+        if (!CanSkipCurrentStep)
+            return string.Empty;
+
+        var step = _objective!.Steps[_stepIndex];
+        var quest = QuestForStep(step);
+        var id = Data.BravesData.MaterialQuestId(quest);
+
+        // Skipped at the grain the step actually is. An accept is one STOP of a sweep, so it is the
+        // QUEST that is skipped and the trip carries on to the next giver; a report is its own
+        // objective, so the objective is what stops being selected.
+        var accept = step.Type == StepType.AcceptBravesQuest;
+        var skipId = accept ? BravesAcceptObjectiveId(quest) : _objective.Id;
+        var label = accept ? $"Accept '{quest}'" : _objective.DisplayName;
+
+        // Log what the engine actually read, not just the skip: this is the only place the
+        // disagreement between "I already have this quest / I already did this" and what game memory
+        // says is visible, and it is what any report about a wrong loop needs to carry.
+        DebugLog.Info($"Skip Step: '{label}' will not be selected again this session " +
+                      $"(quest '{quest}' id {id}, live sequence {GameState.QuestSequence(id)}, " +
+                      $"completed {GameState.IsQuestComplete(id)}, " +
+                      $"reward banked {Data.BravesData.QuestDelivered(quest)}).");
+
+        _skippedObjectives[skipId] = label;
+        _activeExecutor?.Stop(_ctx);
+        _activeExecutor = null;
+        _ctx.Navmesh.Stop();
+        if (_lastFailedObjectiveId == _objective.Id)
+        {
+            _lastFailedObjectiveId = string.Empty;
+            _consecutiveFailures = 0;
+        }
+
+        // Carry on with the rest of THIS objective when it has more stops (the accept sweep), so
+        // skipping one quest does not throw away the trip the others are on.
+        _stepIndex++;
+        if (_stepIndex < _objective.Steps.Count)
+            BeginStep();
+        else
+            _state = State.SelectObjective;
+
+        return $"Skipped: {label}. Relicable will not pick it again this session " +
+               "(reload the plugin to un-skip it).";
+    }
+
+    // The skipped steps, for a stop message: a stage that has gone quiet because YOU waved its
+    // remaining work off must say so rather than look broken. Empty when nothing is skipped.
+    private string SkippedStepGuidance()
+    {
+        if (_skippedObjectives.Count == 0)
+            return string.Empty;
+        var sb = new System.Text.StringBuilder();
+        foreach (var name in _skippedObjectives.Values)
+            sb.Append($"\nSkipped by you (Skip Step): {name}. Reload the plugin to un-skip it.");
+        return sb.ToString();
+    }
+
     // Re-plan from objective selection. Called by the UI when the stage-selection
     // mode or the manual stage changes, so the new choice takes effect immediately
     // instead of after the current step finishes. No-op when not running.
@@ -284,8 +384,11 @@ public sealed class RelicController
         _animusUpgradeRefusedWeaponId = 0;
         _animusUpgradeFailures = 0;
         // A fresh Start re-tries every Braves accept: the player may have just done the sidequest that
-        // was gating one, or cleared whatever stopped the giver offering it.
+        // was gating one, or cleared whatever stopped the giver offering it. _skippedObjectives is
+        // deliberately NOT cleared here -- a skip is the player's own answer, not our inference, and
+        // clearing it would send the run straight back to the same NPC on the next Start.
         _bravesAcceptFailed.Clear();
+        _bravesReportFailed.Clear();
         _bravesFetchTried = false;
         _bravesDoneLogged = false;
         _bravesDeliveredLogged.Clear();
@@ -1009,18 +1112,21 @@ public sealed class RelicController
                     }
                     else
                     {
-                        StopWith(AllBravesQuestsDelivered()
+                        StopWith(BravesStageSatisfied()
+                            ? BravesStageDoneGuidance()
+                            : AllBravesQuestsDelivered()
                             ? BravesFinisherGuidance
                             : AnyBravesMaterialQuestAccepted()
                             ? "Braves: no dungeon item is being requested right now across your accepted material " +
                               "quest(s) -- the current step's drops are obtained, or the next batch is not requested " +
                               "yet. Gather the vendor/crafted items and turn in what you have; the engine resumes when " +
                               "a quest asks for the next dungeon items." + BravesReportGuidance() + BravesAcceptBlockedGuidance()
+                                                                        + SkippedStepGuidance()
                             : "Nexus complete, but no Braves quest could be accepted automatically. Take " +
                               $"'{Data.BravesData.QuestZodiac}' from Jalzahn (Hyrstmill, North Shroud), then the four " +
                               "material quests (A Ponze of Flesh, Labor of Love, Method in His Malice, A Treasured " +
                               "Mother -- all four can be active at once), and the engine will run whichever dungeons " +
-                              "are being requested." + BravesAcceptBlockedGuidance());
+                              "are being requested." + BravesAcceptBlockedGuidance() + SkippedStepGuidance());
                         return;
                     }
                 }
@@ -1077,17 +1183,19 @@ public sealed class RelicController
                     }
                     else
                     {
-                        StopWith(AllBravesQuestsDelivered()
+                        StopWith(BravesStageSatisfied()
+                            ? BravesStageDoneGuidance()
+                            : AllBravesQuestsDelivered()
                             ? BravesFinisherGuidance
                             : AnyBravesMaterialQuestAccepted()
                             ? "Braves: no dungeon item is being requested right now across your accepted material " +
                               "quest(s) (the current step's drops are obtained, or the next batch is not requested yet). " +
                               "Turn in what you have; the engine resumes when a quest asks for the next dungeon items." +
-                              BravesReportGuidance() + BravesAcceptBlockedGuidance()
+                              BravesReportGuidance() + BravesAcceptBlockedGuidance() + SkippedStepGuidance()
                             : "Braves: no stage quest could be accepted automatically. Take " +
                               $"'{Data.BravesData.QuestZodiac}' from Jalzahn (Hyrstmill, North Shroud), then the four " +
                               "material quests, and the engine will run whichever dungeons are being requested." +
-                              BravesAcceptBlockedGuidance());
+                              BravesAcceptBlockedGuidance() + SkippedStepGuidance());
                         return;
                     }
                 }
@@ -1348,11 +1456,31 @@ public sealed class RelicController
     }
 
     // The end-item test on its own. Every path that could start Braves work asks this -- the entry
-    // gate above AND TrySelectBravesAccept/TrySelectBravesFetch -- because the Nexus branch reaches
-    // those directly, and a guard on one route only is how the re-accept survived in the first place.
+    // gate above AND TrySelectBravesAccept/TrySelectBravesFetch/TrySelectBravesReport -- because the
+    // Nexus branch reaches those directly, and a guard on one route only is how the re-accept
+    // survived in the first place (and, later, how a finished stage kept reporting its leftovers).
     private bool BravesStageSatisfied()
     {
         if (_ctx.Config.RepeatCompletedStages)
+            return false;
+
+        // The weapon IN YOUR HANDS still needs this stage -> it is not satisfied, whatever the held
+        // count says.
+        //
+        // These are two different questions and the count only answers one of them. "Do I hold N
+        // finished relics?" answers "should I START another relic?", which is exactly what
+        // RelicTargetCount is for. It cannot answer "is the one I am building finished?" -- and
+        // conflating them shut the whole stage down MID-BUILD for a player whose first relic was
+        // already parked in the armoury: equipped Nexus weapon, one finished relic held, target 1, so
+        // every Braves path declined work and the run stopped to ask for a setting change. An
+        // automation that needs a setting changed to carry on is an automation that stopped.
+        //
+        // This is the same authority the stage's entry gate already uses (see BravesStageReached):
+        // the equipped weapon says where THIS weapon is, while a held count sees a finished relic in
+        // the armoury and concludes the wrong thing about the one being built. Nothing equipped falls
+        // through to the count, which is the right answer there -- there is no weapon to speak for.
+        var equipped = Steps.RelicStageMemo.EffectiveEquippedStage();
+        if (equipped != RelicStage.None && equipped < RelicStage.Braves)
             return false;
 
         var target = Math.Max(1, _ctx.Config.RelicTargetCount);
@@ -1365,14 +1493,42 @@ public sealed class RelicController
         if (!_bravesDoneLogged)
         {
             _bravesDoneLogged = true;
-            DebugLog.Info($"Braves: {held} finished relic weapon(s) held and the target is {target}; " +
-                          "the stage's quests are done and will not be taken again. Raise 'Relics to " +
-                          "build' or tick 'Repeat completed stages' to run it again.");
+            DebugLog.Info($"Braves: {held} finished relic weapon(s) held, the target is {target}, and no " +
+                          "equipped weapon still needs the stage; its quests are done and will not be taken " +
+                          "again. Equip a relic below Braves to keep building it, or raise 'Relics to build' " +
+                          "/ tick 'Repeat completed stages' to run it again.");
         }
         return true;
     }
 
     private bool _bravesDoneLogged;
+
+    // The stage is finished by the held-count rule, so every Braves path declines work. Say exactly
+    // that, with the setting that re-opens it. The alternatives ("no dungeon item is being requested",
+    // "turn in what you have") describe a stage that is still running and send you hunting for
+    // materials you do not need -- and a leftover quest sitting in the journal is named here, because
+    // the journal showing 'A Ponze of Flesh' at step 1 while the engine refuses to touch it is exactly
+    // what makes a finished stage look broken.
+    private string BravesStageDoneGuidance()
+    {
+        var target = Math.Max(1, _ctx.Config.RelicTargetCount);
+        var held = GameState.HeldRelicCountAtOrAbove(RelicStage.Braves);
+        var sb = new System.Text.StringBuilder(
+            $"Braves: you hold {held} finished relic weapon(s), 'Relics to build' is {target}, and nothing " +
+            "you have equipped still needs this stage -- so its quests are done and Relicable will not run " +
+            "them again, including turning in a copy still sitting in your journal. Equip the relic you want " +
+            "carried through Braves (anything below the il125 weapon re-opens the stage on its own), or raise " +
+            "'Relics to build' / tick 'Repeat completed stages' in Settings, then /relic start.");
+        foreach (var name in Data.BravesData.MaterialQuests)
+        {
+            var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
+            if (seq > 0)
+                sb.Append($"\n'{name}' is still accepted (step {seq}) and is being ignored as a leftover " +
+                          "from the finished weapon -- its reward was consumed by 'His Dark Materia', so " +
+                          "nothing about it can be handed over. Abandon it in your journal if you want it gone.");
+        }
+        return sb.ToString();
+    }
 
     // True when at least one Braves material quest is currently accepted (drives the guidance wording:
     // "accept a quest" vs "turn in what you have and the next dungeon step will open").
@@ -1406,7 +1562,7 @@ public sealed class RelicController
     // "Who / where to report to" for each accepted material quest, appended to the "no dungeon
     // requested" guidance so the player knows exactly which NPC advances/turns in each quest (its
     // batch is done or the next batch needs its non-dungeon items first). Empty when none accepted.
-    private static string BravesReportGuidance()
+    private string BravesReportGuidance()
     {
         var parts = new List<string>();
         foreach (var name in Data.BravesData.MaterialQuests)
@@ -1419,12 +1575,49 @@ public sealed class RelicController
             // Sequence-aware: who advances a quest depends on where it is (A Treasured Mother reports
             // to Ealdwine at Swiftperch between batches, Brangwine only for the final turn-in).
             var (npc, _, _, _, where) = Data.BravesData.TurnInNpc(name, seq);
-            if (!string.IsNullOrEmpty(npc))
-                parts.Add($"{name} -> {npc} ({where})");
+            if (string.IsNullOrEmpty(npc))
+                continue;
+            // A report we actually DROVE and that did not advance the quest is not a suggestion any
+            // more, it is a diagnosis: name the items it is short of, right here. Otherwise the stop
+            // says "turn in what you have" for a turn-in that has just been proven impossible, and
+            // the answer lives in another window.
+            parts.Add(_bravesReportFailed.Contains(BravesReportObjectiveId(name, seq))
+                ? $"{name} -> {npc} ({where}) [tried: {npc} could not take it{BravesShortfall(name)}]"
+                : $"{name} -> {npc} ({where})");
         }
         return parts.Count == 0
             ? string.Empty
             : " Report to / turn in at: " + string.Join("; ", parts) + ".";
+    }
+
+    // What a material quest is still short of, read off the live plan, so a turn-in that could not be
+    // made names the items instead of sending the player to another window to work it out. Dungeon
+    // drops are excluded (the engine farms those itself, and a step that wanted one would not have
+    // reached a report) and so are the desynthesis source items (they exist only for the craft path,
+    // and buying the HQ craft outright is just as valid). Empty when the planner is unavailable or
+    // nothing is short.
+    private string BravesShortfall(string quest)
+    {
+        var plan = _ctx.BravesPlanner?.ComputePlan();
+        if (plan == null)
+            return string.Empty;
+
+        var parts = new List<string>();
+        foreach (var line in plan.Lines)
+        {
+            if (line.Need <= 0)
+                continue;
+            if (line.Material.Source is Data.BravesSource.DungeonDrop or Data.BravesSource.DesynthSource)
+                continue;
+            // This quest's own rows, plus the stage-wide ones (Bombard Core / Sacred Spring Water,
+            // whose Quest is a description rather than one of the four quest names).
+            var owner = line.Material.Quest;
+            if (Data.BravesData.MaterialQuests.Contains(owner, StringComparer.OrdinalIgnoreCase)
+                && !string.Equals(owner, quest, StringComparison.OrdinalIgnoreCase))
+                continue;
+            parts.Add(line.Need > 1 ? $"{line.Material.ItemName} x{line.Need}" : line.Material.ItemName);
+        }
+        return parts.Count == 0 ? string.Empty : "; still short: " + string.Join(", ", parts);
     }
 
     // A Braves material quest that is accepted AND holds an obtained dungeon drop not yet handed over is
@@ -1433,6 +1626,12 @@ public sealed class RelicController
     // Braves stage quests this run tried to accept and could not (the giver did not offer it). Skipped
     // on later passes so the stage keeps running its other work; cleared by Start.
     private readonly HashSet<string> _bravesAcceptFailed = new(StringComparer.OrdinalIgnoreCase);
+
+    // Braves report objectives (quest + sequence) whose trip this run made and which did not advance
+    // the quest. Not retried this run, for the same reason as the accepts above: a second identical
+    // round trip cannot succeed where the first failed, and three of them halt the whole run. Cleared
+    // by Start, when the player may have bought/crafted the missing items.
+    private readonly HashSet<string> _bravesReportFailed = new(StringComparer.OrdinalIgnoreCase);
 
     // Whether the Braves retainer fetch has already had its one trip this run. Cleared by Start.
     private bool _bravesFetchTried;
@@ -1451,6 +1650,9 @@ public sealed class RelicController
                 sb.Append($"\n'{quest}' is not offered yet: it is gated behind the sidequest " +
                           $"'{prereq.Name}' from {prereq.Npc} ({prereq.Where}). Complete that and " +
                           "Relicable will pick the quest up on the next Start.");
+            else if (_skippedObjectives.ContainsKey(BravesAcceptObjectiveId(quest)))
+                sb.Append($"\n'{quest}' is being skipped (you pressed Skip Step), so Relicable is not " +
+                          "accepting it. Reload the plugin to un-skip it.");
             else if (_bravesAcceptFailed.Contains(quest))
                 sb.Append($"\n'{quest}' could not be accepted (its giver did not offer it); accept it yourself, " +
                           "then /relic start.");
@@ -1492,11 +1694,17 @@ public sealed class RelicController
         };
     }
 
-    // The next Braves stage quest that is not in hand, as a travel-and-accept objective -- or null when
-    // all five are. Order matters: the umbrella ("Wherefore Art Thou, Zodiac", from Jalzahn) must be
-    // taken first because until it is, the four material quests are not offered at all. The four are
-    // then accepted in turn; they may all be active at once, and each one accepted immediately makes
-    // its dungeons eligible, so the run flows straight from here into real work.
+    // Every Braves stage quest that is not in hand, as ONE travel-and-accept sweep -- or null when
+    // there is nothing to take. All four material quests may be active at once and each one accepted
+    // immediately makes its dungeons eligible, so taking them together is strictly better than one
+    // per objective: three of the four givers (Papana, Guiding Star, Brangwine) stand within a few
+    // yalms of each other in Revenant's Toll, and one objective per quest meant a full re-plan and a
+    // fresh approach between neighbours -- with the fixed AcceptOrder sending the run out to Adkin in
+    // Central Thanalan and back again for the third of them.
+    //
+    // Ordering (see BravesAcceptStops): the umbrella first when it is not in hand -- nothing else is
+    // OFFERED until it is taken, so proximity can never outrank it -- then the zone you are standing
+    // in, then the remaining zones one at a time, nearest stop first within each.
     private RelicObjective? TrySelectBravesAccept()
     {
         // Already holding the end item -> the stage is done and its quests are never taken again.
@@ -1504,9 +1712,57 @@ public sealed class RelicController
         if (BravesStageSatisfied())
             return null;
 
+        var stops = BravesAcceptStops();
+        if (stops.Count == 0)
+            return null;
+
+        var first = stops[0];
+        var steps = stops
+            .Select(s => new StepData
+            {
+                Type = StepType.AcceptBravesQuest,
+                BravesQuest = s.Quest,
+                // The giver's spot is carried on the step purely so the main window's objective name is
+                // click-to-travel (FirstAuthoredSpot); the executor resolves the NPC by data id itself.
+                Position = s.Giver.Pos,
+            })
+            .ToList();
+
+        return new RelicObjective
+        {
+            Stage = RelicStage.Braves,
+            Id = BravesAcceptObjectiveId(first.Quest),
+            DisplayName = stops.Count == 1
+                ? $"Accept '{first.Quest}' ({first.Giver.Npc}, {first.Giver.Where}) -- click to travel there"
+                : $"Accept {stops.Count} Braves quests, starting at {first.Giver.Npc} ({first.Giver.Where}) " +
+                  $"-- {string.Join(", ", stops.Select(s => s.Quest))}",
+            BravesQuest = first.Quest,
+            Territory = first.Giver.Territory,
+            Steps = steps,
+            Completion = new CompletionCondition { Kind = CompletionKind.BravesQuestAccepted },
+        };
+    }
+
+    private readonly record struct BravesAcceptStop(
+        string Quest, (string Npc, uint DataId, uint Territory, Vector3 Pos, string Where) Giver);
+
+    // The accept sweep's stops, in the order they should be visited. Empty when nothing is takeable.
+    private List<BravesAcceptStop> BravesAcceptStops()
+    {
+        var takeable = new List<BravesAcceptStop>();
         foreach (var quest in Data.BravesData.AcceptOrder)
         {
             if (Steps.BravesAcceptExecutor.IsInHand(quest))
+            {
+                // Self-heal a skip: once the quest reads as in hand there is nothing left to override,
+                // so drop the marker rather than let it shape the stop guidance for the rest of the run.
+                _skippedObjectives.Remove(BravesAcceptObjectiveId(quest));
+                continue;
+            }
+            // Skipped by hand from the main window ("Skip Step"): the player says they already hold it.
+            // Session-long, and checked before every other reason so it also silences the accept for a
+            // quest the engine would otherwise keep flying to the giver for.
+            if (_skippedObjectives.ContainsKey(BravesAcceptObjectiveId(quest)))
                 continue;
             // Already DELIVERED for the weapon in progress (its reward item is banked -- see
             // BravesData.QuestDelivered): never re-accept it. IsInHand cannot catch this, because
@@ -1528,28 +1784,92 @@ public sealed class RelicController
             var giver = Data.BravesData.QuestGiver(quest);
             if (giver.DataId == 0)
                 continue; // giver did not resolve; try the next quest rather than stall on this one
-            return new RelicObjective
-            {
-                Stage = RelicStage.Braves,
-                Id = $"braves-accept-{quest}",
-                DisplayName = $"Accept '{quest}' ({giver.Npc}, {giver.Where}) -- click to travel there",
-                BravesQuest = quest,
-                Territory = giver.Territory,
-                // The giver's spot is carried on the step purely so the main window's objective name is
-                // click-to-travel (FirstAuthoredSpot); the executor resolves the NPC by data id itself.
-                Steps = new List<StepData> { new() { Type = StepType.AcceptBravesQuest, Position = giver.Pos } },
-                Completion = new CompletionCondition { Kind = CompletionKind.BravesQuestAccepted },
-            };
+            takeable.Add(new BravesAcceptStop(quest, giver));
         }
-        return null;
+        if (takeable.Count == 0)
+            return takeable;
+
+        // The umbrella is a hard FIRST, not a preference: until "Wherefore Art Thou, Zodiac" is in
+        // hand the four material quests are not offered at all, so a trip to their givers before it
+        // comes back empty-handed however close they are.
+        var ordered = new List<BravesAcceptStop>();
+        var umbrella = takeable.FindIndex(s =>
+            string.Equals(s.Quest, Data.BravesData.QuestZodiac, StringComparison.OrdinalIgnoreCase));
+        if (umbrella >= 0)
+        {
+            ordered.Add(takeable[umbrella]);
+            takeable.RemoveAt(umbrella);
+        }
+
+        // Then zone by zone, the one we are standing in first (no teleport at all), so each zone is
+        // visited once instead of the AcceptOrder zig-zag. Zones otherwise keep AcceptOrder's order of
+        // first appearance, which is deterministic and keeps the Revenant's Toll cluster ahead of the
+        // lone Central Thanalan stop.
+        var here = (uint)Plugin.ClientState.TerritoryType;
+        var zones = new List<uint>();
+        foreach (var stop in takeable)
+            if (!zones.Contains(stop.Giver.Territory))
+                zones.Add(stop.Giver.Territory);
+        // OrderBy, not List.Sort: Sort is unstable, so a comparator that only knows "is this the
+        // current zone" would be free to shuffle every other zone out of AcceptOrder.
+        zones = zones.OrderBy(z => z == here ? 0 : 1).ToList();
+
+        // Nearest-first inside a zone: a greedy chain from where we will arrive (our own position in
+        // the zone we are already in, else that zone's first stop). Three neighbours is not a
+        // travelling-salesman problem, but walking Papana -> Guiding Star -> Brangwine beats bouncing
+        // across Revenant's Toll in whatever order the table happens to list them.
+        foreach (var zone in zones)
+        {
+            var inZone = takeable.Where(s => s.Giver.Territory == zone).ToList();
+            var from = zone == here && Plugin.ObjectTable.LocalPlayer is { } me
+                ? me.Position
+                : inZone[0].Giver.Pos;
+            while (inZone.Count > 0)
+            {
+                var nextIdx = 0;
+                for (var i = 1; i < inZone.Count; i++)
+                    if (Vector3.DistanceSquared(from, inZone[i].Giver.Pos)
+                        < Vector3.DistanceSquared(from, inZone[nextIdx].Giver.Pos))
+                        nextIdx = i;
+                from = inZone[nextIdx].Giver.Pos;
+                ordered.Add(inZone[nextIdx]);
+                inZone.RemoveAt(nextIdx);
+            }
+        }
+        return ordered;
     }
 
-    // Delivered-but-still-accepted quests already named in the log this run, so the "ignoring it"
-    // notice appears once rather than on every selection pass. Cleared by Start.
+    // Still-accepted quests we are ignoring (delivered for this weapon, or left over from a finished
+    // stage) already named in the log this run, so the "ignoring it" notice appears once rather than
+    // on every selection pass. Cleared by Start.
     private readonly HashSet<string> _bravesDeliveredLogged = new(StringComparer.OrdinalIgnoreCase);
 
     private RelicObjective? TrySelectBravesReport()
     {
+        // The stage is already satisfied (you hold the finished weapon(s) the target asks for), so a
+        // material quest still sitting ACCEPTED is a leftover copy with nothing to hand over -- and
+        // QuestDelivered cannot see that, because 'His Dark Materia' consumed its reward item when the
+        // weapon was made. Reporting it can only end in "the dialogue ended but the quest did not
+        // advance", which is exactly the reported Papana loop: A Ponze of Flesh completed, re-accepted
+        // at sequence 1, weapon finished.
+        //
+        // Every other path that starts Braves work already asks this (the entry gate,
+        // TrySelectBravesAccept, TrySelectBravesFetch). This one did not, and a guard on some routes
+        // only is precisely how the re-accept survived the first time.
+        if (BravesStageSatisfied())
+        {
+            foreach (var name in Data.BravesData.MaterialQuests)
+            {
+                if (GameState.QuestSequence(Data.BravesData.MaterialQuestId(name)) <= 0)
+                    continue;
+                if (_bravesDeliveredLogged.Add(name))
+                    DebugLog.Info($"Braves: '{name}' is still accepted, but the stage is finished; " +
+                                  "ignoring the leftover copy. Abandon it in your journal if you want it " +
+                                  "gone, or raise 'Relics to build' to work the stage again.");
+            }
+            return null;
+        }
+
         foreach (var name in Data.BravesData.MaterialQuests)
         {
             var seq = GameState.QuestSequence(Data.BravesData.MaterialQuestId(name));
@@ -1569,6 +1889,25 @@ public sealed class RelicController
             }
             if (Data.BravesData.TurnInNpc(name, seq).DataId == 0)
                 continue; // NPC did not resolve
+            // Skipped by hand from the main window ("Skip Step"). Keyed on quest+sequence, so it silences
+            // exactly the report you waved off: once the quest moves on, its NEXT report is a different
+            // objective and runs normally. Retire any skip taken at an earlier sequence here, so a stale
+            // one cannot linger in the stop guidance.
+            if (_skippedObjectives.Count > 0)
+            {
+                var reportId = BravesReportObjectiveId(name, seq);
+                foreach (var stale in _skippedObjectives.Keys
+                             .Where(k => k.StartsWith(BravesReportIdPrefix(name), StringComparison.OrdinalIgnoreCase)
+                                         && !k.Equals(reportId, StringComparison.OrdinalIgnoreCase))
+                             .ToList())
+                    _skippedObjectives.Remove(stale);
+                if (_skippedObjectives.ContainsKey(reportId))
+                    continue;
+            }
+            // Tried this exact report already this run and the quest did not advance -> do not drive
+            // there again (see _bravesReportFailed).
+            if (_bravesReportFailed.Contains(BravesReportObjectiveId(name, seq)))
+                continue;
             // Report whenever the quest has no dungeon drop left to FARM at its current sequence -- i.e.
             // it is sitting at a DELIVERY step. That covers handing over an obtained dungeon batch AND the
             // VENDOR / CRAFTED / seals delivery steps (step 1 and the final step), which hold no dungeon
@@ -1602,6 +1941,13 @@ public sealed class RelicController
         return false;
     }
 
+    // Objective ids for the two synthetic Braves objectives, in one place because Skip Step keys on
+    // them: an accept is one per quest, a report is one per quest STEP (the live sequence is part of
+    // the id), which is exactly the grain at which each should be skippable.
+    private static string BravesAcceptObjectiveId(string quest) => $"braves-accept-{quest}";
+    private static string BravesReportObjectiveId(string quest, int seq) => $"braves-report-{quest}-{seq}";
+    private static string BravesReportIdPrefix(string quest) => $"braves-report-{quest}-";
+
     // Synthetic per-quest report objective (one BravesReport step). The Id carries the live sequence so
     // the AllStepsDone marker records only THIS report; once it advances the quest (a new sequence) a
     // fresh objective is built. The executor itself drives completion (the quest sequence changing).
@@ -1610,7 +1956,7 @@ public sealed class RelicController
         {
             Stage = RelicStage.Braves,
             BravesQuest = quest,
-            Id = $"braves-report-{quest}-{seq}",
+            Id = BravesReportObjectiveId(quest, seq),
             DisplayName = $"Braves ({quest}): report to {Data.BravesData.TurnInNpc(quest, seq).Npc} to advance the quest",
             Steps = new List<StepData> { new() { Type = StepType.BravesReport } },
             Completion = new CompletionCondition { Kind = CompletionKind.AllStepsDone },
@@ -1985,9 +2331,21 @@ public sealed class RelicController
                 // A failed accept means the giver did not offer that quest. Remember it so the next
                 // pass moves on to the stage's other work instead of re-flying to the same NPC until
                 // the 3-strike backoff halts a run that still had dungeons to do.
-                if (_objective.Completion.Kind == CompletionKind.BravesQuestAccepted
-                    && !string.IsNullOrEmpty(_objective.BravesQuest))
-                    _bravesAcceptFailed.Add(_objective.BravesQuest);
+                // Per STEP, not per objective: the accept objective is a sweep of every takeable quest,
+                // so the one that failed is the one this step was for. Blaming the objective's headline
+                // quest would blacklist the wrong quest and re-try the failed one forever.
+                if (step.Type == StepType.AcceptBravesQuest && QuestForStep(step) is { Length: > 0 } failed)
+                    _bravesAcceptFailed.Add(failed);
+
+                // Same for a failed report: the NPC would not (or could not) advance the quest, which
+                // in practice means this step also wants the vendor/crafted/seals items the engine does
+                // not farm. Nothing about that changes by driving there again, so remember the attempt
+                // and let the stage's other work continue instead of spending all three strikes on the
+                // same round trip and halting a run that still had dungeons to do. Keyed on the
+                // objective id, which carries the quest AND its sequence, so the quest's NEXT step is a
+                // different objective and gets its own attempt. Cleared by Start.
+                if (step.Type == StepType.BravesReport)
+                    _bravesReportFailed.Add(_objective.Id);
 
                 // A failed Atma -> Animus enhancement is EVIDENCE, not just a failure. We send the run
                 // to Jalzahn first precisely because he is the only one who can say whether the

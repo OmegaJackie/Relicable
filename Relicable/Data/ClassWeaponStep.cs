@@ -60,12 +60,19 @@ public static class ClassWeaponSteps
     public const int ChimeraSequence = 4;
 
     // The market board nearest the Limsa Lominsa Lower Decks aetheryte (the closest board to any
-    // teleport destination on the ARR market circuit). Derived from the zone's own layer data
-    // (bg/ffxiv/sea_s1/twn/s1t2/level/planlive.lgb, EObj 2000402 "market board", instance
-    // 4167364) rather than eyeballed: world (-123.44, 18.00, 10.14), map (8.8, 11.5), ~41y from
-    // the aetheryte at world (-84.00, 20.78, 0.03) / map (9.6, 11.3).
+    // teleport destination on the ARR market circuit): world (-122.39, 18.00, 14.28), map
+    // (8.8, 11.5), ~41y from the aetheryte at world (-84.00, 20.78, 0.03) / map (9.6, 11.3).
+    //
+    // This is the STANDING SPOT in front of the board, recorded in-game off the navmesh
+    // (vnavmesh poly 10000010000C6), NOT the board's own origin. Until 1.5.9.7 this was the
+    // EObj position from the zone's layer data (bg/ffxiv/sea_s1/twn/s1t2/level/planlive.lgb,
+    // EObj 2000402 "market board", instance 4167364, world (-123.44, 18.00, 10.14)) -- but an
+    // object origin sits inside its own geometry, so the flag landed behind the counter and
+    // vnav walked you into the wall trying to reach it. Same trap as the quest-path world
+    // objects: authored object positions are never standable, they have to be probed or
+    // recorded from a spot the player can actually occupy.
     public const uint MarketBoardTerritory = 129; // Limsa Lominsa Lower Decks
-    public static readonly Vector3 MarketBoardWorld = new(-123.44f, 18.00f, 10.14f);
+    public static readonly Vector3 MarketBoardWorld = new(-122.391f, 18.00f, 14.284f);
     public const string MarketBoardLabel = "Limsa Lominsa Lower Decks";
 
     private static readonly Dictionary<RelicJob, ClassWeaponStep?> Cache = new();

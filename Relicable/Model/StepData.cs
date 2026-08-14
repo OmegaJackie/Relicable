@@ -86,6 +86,13 @@ public sealed class StepData
     // Interaction
     public uint NpcDataId { get; set; }
 
+    // AcceptBravesQuest: which Braves stage quest THIS stop accepts. Carried per step, not per
+    // objective, because the accept trip takes every quest that is available in one sweep -- three of
+    // the four material quests stand within a few yalms of each other in Revenant's Toll, and one
+    // objective per quest meant a full re-plan (and a zone-order zig-zag) between neighbours. Empty
+    // falls back to the objective's BravesQuest, which is what a single-quest objective sets.
+    public string BravesQuest { get; set; } = string.Empty;
+
     // InteractNpc: take the relic weapon OFF before talking, because the game's hand-over UI lists
     // inventory and armoury items but NOT what is currently in your hands -- so a quest step that
     // asks for the equipped relic ("Give the unfinished <weapon> to Gerolt") can never be satisfied
