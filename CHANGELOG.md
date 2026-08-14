@@ -1,5 +1,169 @@
 # Changelog
 
+## 1.5.9.7 — The market board trip stops in front of the board, not inside it
+
+### Fixed
+
+- **"Market board (Limsa)" on the class-weapon step walked you into a wall.** The very first thing
+  the base relic asks you to line up is the class weapon and its two Grade III materia, and the
+  step's travel button flagged the wrong spot: it used the market board object's own position out
+  of the zone's layer data, which sits *inside* the counter. vnav pathed at the geometry and you
+  ended up pressed against it with no board in reach. The flag is now the standing spot in front
+  of the board, recorded off the navmesh in-game — same zone, same board, roughly four yalms out.
+
+## 1.5.9.6 — One trip for every Braves quest, not one trip each
+
+### Changed
+
+- **The accept trip now takes every quest that is available, in one sweep.** Three of the four
+  material quests are given within a few yalms of each other in Revenant's Toll — Papana, Guiding
+  Star and Brangwine — and the fourth (Adkin) is in Central Thanalan. One objective per quest meant
+  a full re-plan and a fresh approach between neighbours standing side by side, and because the
+  order was the fixed accept order, the run went Mor Dhona → Central Thanalan → **back to Mor
+  Dhona** for the third of them.
+
+  A single objective now carries one stop per takeable quest, ordered so the trip is a sweep:
+
+  - "Wherefore Art Thou, Zodiac" first whenever it is not in hand — a hard rule, not a preference,
+    since none of the four are *offered* until it is taken, so proximity can never outrank it;
+  - then the zone you are standing in, which costs no teleport at all;
+  - then the remaining zones one at a time, so each is visited once;
+  - nearest stop first inside each zone, chained from where the previous one left you.
+
+  The objective's progress now reads "n / m quests accepted" rather than a single done/not-done.
+
+- **Skip Step follows the same grain.** On an accept it skips that one *quest* and the trip carries
+  on to the next giver, instead of throwing away the stops the sweep had left. On a report it is
+  unchanged (a report is its own objective).
+
+- A failed accept is now blamed on **the quest that stop was for**, not the objective's headline
+  quest — with several stops per objective, the old bookkeeping would have blacklisted the wrong
+  quest and retried the failing one forever.
+
+## 1.5.9.5 — The weapon in your hands outranks the weapons in your armoury
+
+### Fixed
+
+- **A finished relic in the armoury shut down the stage for the relic you were building.** With an
+  equipped **Nexus** weapon, one finished relic held and 'Relics to build' at 1, every Braves path
+  declined work and the run stopped — asking you to change a setting before it would carry on. That
+  is not automation.
+
+  The held-count test answers *"should I start another relic?"* — which is exactly what 'Relics to
+  build' is for. It cannot answer *"is the one I am building finished?"*, and the two were the same
+  check. The equipped weapon answers the second question, which is the authority the stage's entry
+  gate already used and the reason it was written that way. So: **a relic below the il125 weapon in
+  your hands means the Braves stage is not finished, whatever is parked in the armoury.** Nothing
+  equipped still falls through to the count — there is no weapon to speak for.
+
+  'Relics to build' keeps its meaning for the case it was written for: finish the weapon you are
+  carrying, then stop offering to start a new line.
+
+- **A turn-in that cannot succeed is tried once now, not three times.** A report the engine drove
+  that did not advance the quest is remembered for the run (quest **and** step, so the quest's next
+  step gets its own attempt), exactly as a failed quest accept already was. Before, the same
+  round trip ran three times and spent the whole failure budget, halting a run that still had
+  dungeons to farm and quests to accept. A fresh Start re-tries — by then you may have bought the
+  missing items.
+
+- **The stop now names what is missing.** A report that was driven and refused is reported as
+  `A Ponze of Flesh -> Papana (Revenant's Toll, Mor Dhona) [tried: Papana could not take it; still
+  short: Bombard Core, Sacred Spring Water, Bronze Lake Crystal, Perfect Firewood, Furnace Ring]`,
+  read from the live plan. The old text said "turn in what you have" for a turn-in that had just
+  been proven impossible, and left you to work out why in another window.
+
+## 1.5.9.4 — A finished Braves stage stops reporting its leftovers
+
+### Fixed
+
+- **A finished Braves stage still marched to Papana forever.** Reported live, with the readout from
+  the new Skip Step tooltip: 'A Ponze of Flesh' — quest 65893, completed **yes**, sitting **accepted
+  again at step 1**, reward **not** banked — while a finished relic weapon was already held and
+  'Relics to build' was 1. Every run picked "report to Papana to advance the quest", the dialogue
+  ended with nothing advanced, and three strikes later the run halted.
+
+  The stage's "already done, never take these quests again" guard was asked by the entry gate, by
+  the accept path and by the retainer-fetch path — but **not by the report path**, which is the one
+  route that only needs a quest to be *accepted*. Nothing else could catch it either: the reward
+  item is the per-quest "already delivered" witness, and 'His Dark Materia' consumes all four when
+  the weapon is made, so a leftover copy of a quest from a finished weapon looks exactly like one
+  waiting to be handed in. The report path now asks the same question as its siblings, and names any
+  leftover it is ignoring.
+
+- **The stop message for a finished stage described a stage still in progress.** "No dungeon item is
+  being requested right now… gather the vendor/crafted items and turn in what you have" sent you
+  hunting for 100,000-gil materials you did not need. When the stage is done by the held-count rule
+  it now says so — how many finished weapons you hold against 'Relics to build', that this is why
+  nothing Braves will run, and that raising that count (or ticking 'Repeat completed stages') is
+  what re-opens it — plus a line for each leftover quest still sitting in the journal, with what it
+  is and why it cannot be turned in.
+
+## 1.5.9.3 — Skip Step, for a Braves quest step you have already handled
+
+### Added
+
+- **"Skip Step" on the main window**, the way Questionable offers one — but only while the running
+  step is a Braves quest step: *accepting* one of the material quests, or *reporting* one to its NPC.
+  Both decide they are finished by reading the quest out of game memory (in hand / its sequence
+  changed), and both drive an NPC who may simply have nothing to say. When that read disagrees with
+  what you can plainly see in your own journal, the run has no way out from the inside: it
+  re-selects the objective, travels back to the same NPC, and the conversation ends with nothing
+  advanced — the reported Papana loop, which then burns three strikes and halts the run.
+
+  Pressing Skip stops that trip, takes the objective out of selection, and re-plans onto the rest of
+  the stage. It survives Stop/Start on purpose — a skip is your answer, not the engine's inference,
+  so clearing it on the next Start would send the run straight back to the NPC. Reload the plugin to
+  un-skip.
+
+  A skip lands at the grain that matches the step: an *accept* is skipped for the whole session,
+  while a *report* is skipped only for the quest step it was pressed on, so waving off a turn-in you
+  cannot satisfy today does not silence the next one once the quest moves on. The stop guidance
+  names whatever you skipped, so a stage that goes quiet afterwards says why.
+
+  No other step gets one: every other step either completes on a game-state flag that cannot lie (an
+  item held, a duty cleared, a gauge filled) or fails into the 3-strike backoff, and a general "skip
+  anything" button would mostly be a way to desync the engine from the game.
+
+- **The button's tooltip shows the numbers the engine actually read** for that quest — its quest id,
+  live sequence, completed flag and whether its reward item is banked — so a "but I already did
+  this" disagreement can be diagnosed instead of argued with. The same line goes to the debug log on
+  every skip.
+
+## 1.5.9.2 — A finished Braves quest stays finished
+
+### Fixed
+
+- **Completing a Braves material quest re-accepted it on the spot, then looped on a report it could
+  not advance.** Reported live: 'A Ponze of Flesh' turned in, immediately picked up again, and the
+  run parked on "report to Papana" while the fresh quest — sitting at its first step with the
+  vendor/crafted items already consumed — had nothing to hand over.
+
+  The four material quests are repeatable, so the moment one completes its sequence returns to 0
+  and it reads exactly like "never accepted" — and the existing guard (do you already hold a
+  finished Braves weapon?) only helps once the *whole stage* is done, which is four quests and a
+  finisher too late. Mid-stage, nothing testified that a quest was already delivered.
+
+  Something does, though: each quest's **reward item**. A Ponze of Flesh pays a Book of Skylight,
+  Labor of Love a Zodium, Method in His Malice a Zodiac Scroll and A Treasured Mother a Flawless
+  Alexandrite (verified against the game's quest sheet), and 'His Dark Materia' consumes all four
+  only at the very end of the stage. Holding one is proof its quest is delivered for the weapon in
+  progress — and it survives reloads, relogs and job changes.
+
+  All four quests now honour that witness everywhere the engine decides Braves work: a delivered
+  quest is never re-accepted, never chosen for an NPC report, and none of its dungeons are run —
+  even if a stray accepted copy is still sitting in the journal from before this fix (that copy is
+  ignored, named once in the log, and simply serves the next weapon). When all four rewards are
+  banked the run now says the real remaining step: complete 'His Dark Materia' at Gerolt
+  (Hyrstmill, North Shroud) — or Jalzahn's 'Zodiac Weapon Recreation' on a repeat weapon.
+
+- **The Braves shopping list re-demanded materials a finished quest had already eaten.** A
+  delivered quest's rows now count zero (and the stage-wide Bombard Core / Sacred Spring Water
+  rows shrink by one per delivered quest), so the totals, the window and the retainer auto-fetch
+  stop asking you to re-buy 100,000-gil items for quests that are done.
+
+- **The four reward items are protected from auto-discard**, alongside the other relic-line items:
+  losing one would both un-prove the quest and cost the whole set of materials it was traded for.
+
 ## 1.5.9.1 — Avoidance survived exactly one pull
 
 ### Fixed

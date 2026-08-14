@@ -246,6 +246,114 @@ public static class BravesData
     public static readonly IReadOnlyList<string> AcceptOrder =
         new[] { QuestZodiac, QuestPonze, QuestLabor, QuestMethod, QuestMother };
 
+    // ---- Quest rewards: the per-quest "already delivered" witness ----
+    //
+    // Each material quest REWARDS one untradable item at its final turn-in (Quest.Reward[0], verified
+    // against XIVAPI v2 2026-08-08: A Ponze of Flesh -> Book of Skylight, Labor of Love -> Zodium,
+    // Method in His Malice -> Zodiac Scroll, A Treasured Mother -> Flawless Alexandrite), and the
+    // stage finisher ('His Dark Materia' at Gerolt, or Jalzahn's repeat-weapon 'Zodiac Weapon
+    // Recreation') consumes all four at the END of the stage. So holding a reward is the one
+    // game-state proof that its quest is finished FOR THE WEAPON IN PROGRESS. The quests themselves
+    // cannot testify -- they are repeatable, so a just-completed one reads sequence 0, exactly like
+    // never accepted -- and the materials cannot either, being consumed at each hand-over. Without
+    // this witness the engine re-accepted 'A Ponze of Flesh' the moment it was completed, then looped
+    // on a Papana "report" the fresh quest could not advance.
+    public static string RewardItemName(string questName)
+        => (questName?.Trim() ?? string.Empty) switch
+        {
+            QuestPonze  => "Book of Skylight",
+            QuestLabor  => "Zodium",
+            QuestMethod => "Zodiac Scroll",
+            QuestMother => "Flawless Alexandrite",
+            _ => string.Empty,
+        };
+
+    // Latched only once EVERY reward name resolved: a partial scan (the Item sheet still loading,
+    // or a name drifting after a game patch) must retry, because an unresolved reward silently
+    // reads "not delivered" and re-enables the exact re-accept loop the witness exists to stop.
+    // The retry is rate-limited (the AutoDiscard pattern): QuestDelivered is asked per frame by
+    // the planner window, and an unresolvable name must not rescan the whole Item sheet each call.
+    private static Dictionary<string, uint>? _rewardIds;
+    private static Dictionary<string, uint>? _rewardPartial;
+    private static long _rewardRetryAt;
+    private static int _rewardWarnedCount = -1;
+    private const long RewardRetryMs = 2000;
+
+    public static uint RewardItemId(string questName)
+    {
+        var name = RewardItemName(questName);
+        if (name.Length == 0)
+            return 0;
+        var map = _rewardIds;
+        if (map == null)
+        {
+            if (_rewardPartial != null && Environment.TickCount64 < _rewardRetryAt)
+            {
+                map = _rewardPartial;
+            }
+            else
+            {
+                _rewardRetryAt = Environment.TickCount64 + RewardRetryMs;
+                var wanted = new List<string>();
+                foreach (var quest in MaterialQuests)
+                    wanted.Add(RewardItemName(quest));
+                map = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    foreach (var item in Plugin.DataManager.GetExcelSheet<Item>())
+                    {
+                        var n = item.Name.ExtractText().Trim();
+                        if (n.Length != 0 && wanted.Contains(n, StringComparer.OrdinalIgnoreCase) && !map.ContainsKey(n))
+                            map[n] = item.RowId;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Warning($"Relicable: Braves reward lookup failed: {ex.Message}");
+                }
+                if (map.Count == MaterialQuests.Count)
+                    _rewardIds = map;
+                else
+                {
+                    _rewardPartial = map;
+                    // Edge-triggered on the resolved count: the retry itself is silent (it re-runs
+                    // every RewardRetryMs while callers poll), or a permanently unresolvable name
+                    // (non-English client, post-patch rename) would warn every 2 seconds forever.
+                    if (map.Count != _rewardWarnedCount)
+                    {
+                        _rewardWarnedCount = map.Count;
+                        Plugin.Log.Warning($"Relicable: only {map.Count} of {MaterialQuests.Count} Braves reward " +
+                                           "item names resolved; the delivered-quest witness is degraded until they do.");
+                    }
+                }
+            }
+        }
+        return map.TryGetValue(name, out var id) ? id : 0u;
+    }
+
+    // True when the quest's reward item is in the bags: the quest is DELIVERED for the weapon in
+    // progress and must not be re-accepted, reported to, or farmed for until the stage finisher
+    // consumes the reward. Deliberately unconditional (no RepeatCompletedStages escape): even on a
+    // repeat build, a banked reward means the next finisher is already fed and re-running the quest
+    // buys nothing. Reads bags + armoury (InventoryCount); a reward parked on a retainer is
+    // invisible and the quest would look runnable again -- keep the four in your inventory.
+    public static bool QuestDelivered(string questName)
+    {
+        var id = RewardItemId(questName);
+        return id != 0 && Steps.GameState.InventoryCount(id) > 0;
+    }
+
+    // How many of the four material quests are delivered (reward banked). Drives the shopping
+    // list's stage-wide rows, whose authored quantity is one per quest.
+    public static int DeliveredQuestCount()
+    {
+        var n = 0;
+        foreach (var quest in MaterialQuests)
+            if (QuestDelivered(quest))
+                n++;
+        return n;
+    }
+
     // A material quest's current destination NPC: its ENpcResident data id, the overworld
     // TerritoryType to teleport to, an approach anchor (world X/Y/Z from the Level sheet; the
     // NpcInteractor homes on the live NPC by data id once it streams in, so the anchor only needs

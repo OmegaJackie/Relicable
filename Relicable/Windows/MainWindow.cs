@@ -34,6 +34,11 @@ public sealed class MainWindow : Window
     private readonly Action _openConfig;
     private string _startError = string.Empty;
 
+    // Confirmation of the last "Skip Step" press. The objective panel it was pressed from is gone by
+    // the next frame (the run re-plans onto something else), so without this the button would look
+    // like it did nothing. Cleared by Start/Stop.
+    private string _skipNotice = string.Empty;
+
     public MainWindow(
         RelicController controller, Configuration config, NavmeshIpc navmesh,
         ArtisanCraftingList artisanLists, Licensing.AlphaGate alphaGate,
@@ -212,6 +217,17 @@ public sealed class MainWindow : Window
                     : $"Flags {obj.TargetName} on the map and teleports you there.");
 
             ImGui.Text($"Step: {_controller.ActiveStepIndex + 1} / {obj.Steps.Count}");
+
+            // "Skip Step" (Questionable's escape hatch), offered for the two steps that can disagree
+            // with what you can see in your own journal: accepting a Braves quest and reporting one.
+            // See RelicController.CanSkipCurrentStep for why no other step gets one.
+            if (_controller.CanSkipCurrentStep)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Skip Step"))
+                    _skipNotice = _controller.SkipCurrentStep();
+                Ui.Tooltip(SkipStepTooltip(obj, obj.Steps[_controller.ActiveStepIndex]));
+            }
             DrawObjectiveProgress(obj);
         }
         else
@@ -219,10 +235,14 @@ public sealed class MainWindow : Window
             ImGui.TextDisabled("No active objective.");
         }
 
+        if (_skipNotice.Length > 0)
+            Ui.Wrapped(Yellow, _skipNotice);
+
         ImGui.Separator();
 
         if (ImGui.Button("Start"))
         {
+            _skipNotice = string.Empty;
             if (_controller.Start())
             {
                 _startError = string.Empty;
@@ -246,6 +266,7 @@ public sealed class MainWindow : Window
         {
             _controller.Stop();
             _startError = string.Empty;
+            _skipNotice = string.Empty;
         }
 
         if (_startError.Length > 0)
@@ -700,6 +721,37 @@ public sealed class MainWindow : Window
         ImGui.TextColored(Grey, "From G'Jusana (Rowena's House of Splendors, Mor Dhona; 100 poetics). Start does this automatically.");
     }
 
+    // Hover text for "Skip Step": what it does, how long it lasts, and -- the part that matters when
+    // the quest in front of you says something different -- the numbers the engine actually read to
+    // decide this step is still owed, so the disagreement can be seen instead of argued with.
+    private static string SkipStepTooltip(RelicObjective obj, StepData step)
+    {
+        // The quest is per step (an accept objective is a sweep of every takeable quest), with the
+        // objective's headline quest as the single-quest fallback.
+        var quest = step.BravesQuest.Length > 0 ? step.BravesQuest : obj.BravesQuest;
+        var id = Data.BravesData.MaterialQuestId(quest);
+        var seq = GameState.QuestSequence(id);
+
+        var accept = step.Type == StepType.AcceptBravesQuest;
+        var what = accept
+            ? $"Stop trying to accept '{quest}' and carry on with the rest of the trip.\n" +
+              "That one quest stays skipped for the whole session; the other stops on this trip still run."
+            : $"Stop reporting '{quest}' to its NPC and move on to the rest of the run.\n" +
+              $"Only THIS report is skipped (the quest's step {seq}); once the quest advances, the next " +
+              "one runs normally.";
+
+        var why = accept
+            ? "Sequence 0 is what reads as \"not in hand\" -- these quests are repeatable, so a finished " +
+              "one looks exactly like one you never took."
+            : "A report only advances the quest when you hold everything that step asks for, including " +
+              "the vendor/crafted/seals items the engine does not farm -- see /relic braves.";
+
+        return what + "\nStop/Start keeps it skipped; reload the plugin to un-skip it.\n\n" +
+               $"Relicable reads: quest id {id}, live sequence {seq}, " +
+               $"completed {(GameState.IsQuestComplete(id) ? "yes" : "no")}, " +
+               $"reward banked {(Data.BravesData.QuestDelivered(quest) ? "yes" : "no")}.\n" + why;
+    }
+
     private void DrawObjectiveProgress(RelicObjective obj)
     {
         var c = obj.Completion;
@@ -758,8 +810,27 @@ public sealed class MainWindow : Window
                 ImGui.TextColored(Grey, "Driving a summoning bell to pull the quest materials your retainers hold.");
                 break;
             case CompletionKind.BravesQuestAccepted:
-                Done(Steps.BravesAcceptExecutor.IsInHand(obj.BravesQuest));
+            {
+                // An accept objective is a SWEEP: one step per quest still to take, so count them
+                // rather than reading the objective's headline quest, which would show "complete"
+                // while the trip still had givers to visit.
+                var want = 0;
+                var have = 0;
+                foreach (var s in obj.Steps)
+                {
+                    if (s.Type != StepType.AcceptBravesQuest || s.BravesQuest.Length == 0)
+                        continue;
+                    want++;
+                    if (Steps.BravesAcceptExecutor.IsInHand(s.BravesQuest))
+                        have++;
+                }
+                if (want > 1)
+                    Bar(have, want, "quests accepted");
+                else
+                    Done(Steps.BravesAcceptExecutor.IsInHand(
+                        want == 1 ? obj.Steps[0].BravesQuest : obj.BravesQuest));
                 break;
+            }
             case CompletionKind.NovusUpgraded:
                 ImGui.TextColored(Grey,
                     "Animus enhancement at Jalzahn (Hyrstmill): the filled Sphere Scroll + the unequipped Animus weapon.");

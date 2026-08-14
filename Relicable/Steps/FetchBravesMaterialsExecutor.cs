@@ -69,7 +69,11 @@ public sealed class FetchBravesMaterialsExecutor : ITaskExecutor
             return want;
         foreach (var line in planner.ComputePlan().Lines)
             if (line.Fetchable)
-                want[line.ItemId] = want.GetValueOrDefault(line.ItemId) + line.Material.Quantity;
+                // Have + Need is the plan's DELIVERED-ADJUSTED total (see BravesPlanner.ComputePlan),
+                // not the authored Quantity: the stage-wide rows (Bombard Core / Sacred Spring Water)
+                // shrink as quests are delivered, and holding to the authored 4 would withdraw the
+                // very items the finished turn-ins already consumed their share of.
+                want[line.ItemId] = want.GetValueOrDefault(line.ItemId) + line.Have + line.Need;
         return want;
     }
 

@@ -135,7 +135,11 @@ public sealed class BravesWindow : Window
         {
             if (l.ItemId == 0 || l.Need <= 0)
                 continue;
-            needs[l.ItemId] = needs.GetValueOrDefault(l.ItemId) + l.Material.Quantity;
+            // Have + Need is the plan's DELIVERED-ADJUSTED total (see BravesPlanner.ComputePlan),
+            // not the authored Quantity: a stage-wide row (Bombard Core / Sacred Spring Water)
+            // shrinks as quests are delivered, and pulling to the authored 4 would withdraw the
+            // very items the finished turn-ins already consumed their share of.
+            needs[l.ItemId] = needs.GetValueOrDefault(l.ItemId) + l.Have + l.Need;
         }
         _fetch.Start(needs, what, BravesData.GameName,
             () => _config.RetainerBravesItems.Retainers.Values

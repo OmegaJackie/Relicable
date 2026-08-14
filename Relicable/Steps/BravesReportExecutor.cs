@@ -60,6 +60,15 @@ public sealed class BravesReportExecutor : ITaskExecutor
 
         _quest = ctx.CurrentObjective?.BravesQuest ?? string.Empty;
         _questId = BravesData.MaterialQuestId(_quest);
+        // Already delivered for this weapon (reward item banked): there is nothing left to hand
+        // over even if the quest sits accepted again, so a report trip could only end in "the
+        // dialogue ended but the quest did not advance". The controller no longer selects these;
+        // this guard covers a user-forced run and any stale objective.
+        if (BravesData.QuestDelivered(_quest))
+        {
+            _phase = Phase.Done;
+            return;
+        }
         // Resolve the sequence FIRST: which NPC a quest wants depends on where it is. A Treasured
         // Mother reports to Ealdwine at Swiftperch between batches and only returns to Brangwine for
         // the final turn-in, so a sequence-blind lookup sends the whole trip to the wrong zone.

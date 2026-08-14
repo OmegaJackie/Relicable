@@ -76,7 +76,12 @@ public sealed class BravesAcceptExecutor : ITaskExecutor
         _menuSince = 0;
         _lastMenuSig = string.Empty;
 
-        _quest = ctx.CurrentObjective?.BravesQuest ?? string.Empty;
+        // The quest is per STEP, so one objective can be a whole accept sweep (the three Revenant's
+        // Toll givers in a row). The objective-level name remains the fallback for a single-quest
+        // objective and for anything that built a step without one.
+        _quest = string.IsNullOrEmpty(step.BravesQuest)
+            ? ctx.CurrentObjective?.BravesQuest ?? string.Empty
+            : step.BravesQuest;
         _questId = BravesData.MaterialQuestId(_quest);
         var (npc, dataId, territory, pos, _) = BravesData.QuestGiver(_quest);
         _npcName = npc;
@@ -87,6 +92,14 @@ public sealed class BravesAcceptExecutor : ITaskExecutor
         // Already in hand (accepted between selection and now) -> nothing to do; the controller re-plans
         // and skips it.
         if (IsInHand(_quest))
+        {
+            _phase = Phase.Done;
+            return;
+        }
+
+        // Already delivered for this weapon (reward item banked): re-accepting would restart a
+        // finished quest. The controller skips these; this covers a user-forced run.
+        if (BravesData.QuestDelivered(_quest))
         {
             _phase = Phase.Done;
             return;
