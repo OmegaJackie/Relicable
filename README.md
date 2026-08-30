@@ -160,5 +160,6 @@ disagreeing with live game state and the log is the only record of what it saw.
 
 ## License
 
-[AGPL-3.0](LICENSE). If you run a modified version as a network service, you must publish your
-source.
+Relicable is Copyright (C) 2026 OmegaJackie and licensed under [AGPL-3.0](LICENSE). If you run a
+modified version as a network service, you must publish your source. Third-party components and
+their notices are listed in [NOTICE.md](NOTICE.md).
