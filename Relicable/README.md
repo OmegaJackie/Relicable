@@ -29,9 +29,6 @@ Controllers/
   AtmaCbtDriver.cs         Delegation to Bundle of Tweaks' Fate Tool Kit for the Atma farm.
 
 Licensing/
-  AlphaCode.cs             Early Alpha code format + verification. SHARED SOURCE with
-                           tools/RelicableKeygen — edit in one place, both rebuild.
-  AlphaGate.cs             Runtime gate state; the single choke point in Plugin.OnUpdate.
 
 Model/                     Plain records: StepType, RelicStage, StepData, RelicObjective,
                            ExecutionContext (the per-tick bundle handed to every executor),

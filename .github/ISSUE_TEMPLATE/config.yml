@@ -3,14 +3,6 @@
 blank_issues_enabled: false
 
 contact_links:
-  - name: Early Alpha access request
-    url: https://github.com/OmegaJackie/Relicable#early-alpha
-    about: >-
-      Relicable is invite-only during the early alpha and needs an access code to
-      run. Access requests go through the developer directly - do NOT open a
-      GitHub issue for one, they will be closed. See the README for how to ask.
-      Never post an access code publicly, including in issues, comments or
-      screenshots.
 
   - name: Setup and build help
     url: https://github.com/OmegaJackie/Relicable/blob/main/BUILDING.md

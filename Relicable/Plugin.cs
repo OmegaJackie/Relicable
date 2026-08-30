@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Dalamud.Game;
 using Dalamud.Game.Command;
@@ -53,11 +53,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Braves.RelicNoteBookHook _bookHook;
     private readonly External.IfritBurstRotationSwap _burstRotationSwap;
     private readonly External.WrathComboCombatBackend _wrathCombo;
-    private readonly Licensing.AlphaGate _alphaGate;
-    private readonly AlphaGateWindow _alphaGateWindow;
-    // Latches the Early Alpha gate closing mid-session (a code expiring while the game is
-    // open), so the running automation is stopped exactly once rather than every frame.
-    private bool _stoppedForAlphaGate;
 
     public Plugin()
     {
@@ -90,12 +85,6 @@ public sealed class Plugin : IDalamudPlugin
             _config.AvoidancePresetMigratedOffMultibox = true;
             PluginInterface.SavePluginConfig(_config);
         }
-
-        // Early Alpha gate. Constructed before anything else so its state is known by the
-        // time the windows are built; it re-verifies the stored code against the signing
-        // public key on every load, so an expired or revoked code closes the gate again
-        // rather than staying unlocked from a cached flag.
-        _alphaGate = new Licensing.AlphaGate(_config, () => PluginInterface.SavePluginConfig(_config));
 
         Diagnostics.DebugLog.Enabled = _config.EnableDebugLog;
         Steps.LocationNavigator.Config = _config; // flight gate for the click-to-fly flow
@@ -239,7 +228,7 @@ public sealed class Plugin : IDalamudPlugin
         _baseRelicWindow = new BaseRelicWindow(_prereqChecker, _config, artisanLists);
 
         _mainWindow = new MainWindow(
-            _controller, _config, navmesh, artisanLists, _alphaGate,
+            _controller, _config, navmesh, artisanLists,
             _novusWindow.Toggle, _bravesWindow.Toggle, _baseRelicWindow.Toggle,
             () => PluginInterface.SavePluginConfig(_config),
             // Deferred: _configWindow is assigned on the next line, so a method group here would
@@ -252,19 +241,11 @@ public sealed class Plugin : IDalamudPlugin
         // and teleport. Hooks the RelicNoteBook addon; independent of the automation runner.
         _bookHook = new Braves.RelicNoteBookHook(_config);
 
-        _alphaGateWindow = new AlphaGateWindow(_alphaGate, _mainWindow.Toggle);
-
         _windowSystem.AddWindow(_mainWindow);
         _windowSystem.AddWindow(_configWindow);
         _windowSystem.AddWindow(_novusWindow);
         _windowSystem.AddWindow(_bravesWindow);
         _windowSystem.AddWindow(_baseRelicWindow);
-        _windowSystem.AddWindow(_alphaGateWindow);
-
-        // Locked: open the gate on load rather than leaving a new user to discover why
-        // nothing happens when they press Start.
-        if (!_alphaGate.Unlocked)
-            _alphaGateWindow.IsOpen = true;
 
         PluginInterface.UiBuilder.Draw += _windowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
@@ -381,38 +362,13 @@ public sealed class Plugin : IDalamudPlugin
     // the gate instead of a window whose buttons do nothing.
     private void OpenMainUi()
     {
-        if (_alphaGate.Unlocked)
-            _mainWindow.Toggle();
-        else
-            _alphaGateWindow.IsOpen = true;
+        _mainWindow.Toggle();
     }
 
     private void OnUpdate(IFramework framework)
     {
         if (!ClientState.IsLoggedIn)
             return;
-
-        // ---- Early Alpha gate ----
-        // The single choke point. Everything below this line is automation, and none of it
-        // runs without a valid code. Enforcing it here rather than inside each executor
-        // means there is exactly one place to read and one place to audit -- no window
-        // button or slash command can quietly route around it.
-        _alphaGate.Tick();
-        if (!_alphaGate.Unlocked)
-        {
-            // A code that expired mid-session: stop the run once, tell the user why, and
-            // put the gate back in front of them.
-            if (!_stoppedForAlphaGate)
-            {
-                _stoppedForAlphaGate = true;
-                _controller.Stop();
-                _alphaGateWindow.IsOpen = true;
-                if (!string.IsNullOrEmpty(_alphaGate.Status))
-                    Log.Warning("Relicable: " + _alphaGate.Status);
-            }
-            return;
-        }
-        _stoppedForAlphaGate = false;
 
         // Drive the planner's click-to-fly (teleport, then /vnav flyflag once you arrive).
         Steps.LocationNavigator.Tick();
@@ -451,14 +407,6 @@ public sealed class Plugin : IDalamudPlugin
     {
         var trimmed = args.Trim();
         var lower = trimmed.ToLowerInvariant();
-
-        // Locked build: every subcommand lands on the gate. Silently doing nothing (or
-        // opening a window whose controls are inert) is the confusing alternative.
-        if (!_alphaGate.Unlocked)
-        {
-            _alphaGateWindow.IsOpen = true;
-            return;
-        }
 
         // Undocumented diagnostic subcommands. Kept, because an alpha tester with a stuck step
         // gets asked to run one and paste /xllog -- but only reachable with "Enable debug log"

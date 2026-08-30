@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest a stage, quality-of-life change, or new behaviour for the relic automation.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Relicable automates the ARR Zodiac line by orchestrating other plugins over IPC.
+        Requests that fit that shape are the easiest to act on.
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this is not already requested.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is awkward today
+      description: Describe the situation you hit, not just the feature you want. The underlying problem is usually the more useful half.
+      placeholder: "Nexus light farming picks duties I have not unlocked, so the run stalls until I notice."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: input
+    id: stage
+    attributes:
+      label: Which stage does this affect
+      placeholder: "Nexus (or: all stages / the planner / the UI)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Alternatives you considered, or companion plugins that would be involved.
+    validations:
+      required: false

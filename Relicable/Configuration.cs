@@ -1,4 +1,4 @@
-using Dalamud.Configuration;
+﻿using Dalamud.Configuration;
 using Newtonsoft.Json;
 using Relicable.Model;
 
@@ -569,12 +569,6 @@ public sealed class Configuration : IPluginConfiguration
     [JsonProperty("BossModCombatPreset")]
     private string LegacyBossModCombatPreset { set => BossModRebornCombatPreset = value; }
 
-    // ---- Early Alpha access ----
-    // The redeemed access code, stored verbatim so it can be re-verified on every load
-    // (rather than caching an "unlocked" boolean, which would survive the code expiring).
-    // Validated by Licensing.AlphaCode against the signing public key compiled into the
-    // build; see Licensing/AlphaGate.cs.
-    public string AlphaAccessCode { get; set; } = string.Empty;
 
     // Diagnostics
     public bool EnableDebugLog { get; set; }
