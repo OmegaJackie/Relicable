@@ -25,22 +25,11 @@ it do the wrong thing.
 
 ---
 
-## Early Alpha
+## Status
 
-**Relicable is in Early Alpha and requires an access code to run.** Without one the plugin
-loads, shows the access window, and does nothing else.
-
-Codes are issued individually by the developer. Each carries the name it was issued to and an
-expiry date, and **the name it was issued to is shown in the plugin window while it is in
-use** — so a code passed on to someone else displays the original owner's name on their screen.
-Codes are not transferable and are revoked when they are found being shared.
-
-To request access, contact the developer. Please do not open a GitHub issue asking for a code,
-and **never paste a code into an issue, a log, or a screenshot** — it is a bearer token.
-
-Alpha means alpha. Expect steps that stall, objectives that need a nudge, and behaviour that
-changes between builds. Bug reports with a debug log attached are genuinely useful; see
-[Reporting bugs](#reporting-bugs).
+Relicable is under active development and free for anyone to install and use. Expect steps
+that stall, objectives that need a nudge, and behaviour that changes between builds. Bug
+reports with a debug log attached are genuinely useful - see [Reporting bugs](#reporting-bugs).
 
 ## What it covers
 
@@ -67,7 +56,7 @@ changes between builds. Bug reports with a debug log attached are genuinely usef
    ```
 
 3. **Save**, then open `/xlplugins` and install **Relicable**.
-4. Run `/relic` and enter your Early Alpha access code.
+4. Run `/relic` to open the main window.
 
 Relicable is marked testing-exclusive, so you may need **Get plugin testing builds** enabled in
 `/xlsettings` → Experimental.
@@ -132,8 +121,13 @@ already passed, switch stage selection to **Manual** in the main window.
 
 ## Reporting bugs
 
-Open an issue using the bug report template. It asks for the things that actually determine
-whether a report is actionable:
+Bugs and feature requests both go through
+[GitHub Issues](https://github.com/OmegaJackie/Relicable/issues) — pick
+[Bug report](https://github.com/OmegaJackie/Relicable/issues/new?template=bug_report.yml) or
+[Feature request](https://github.com/OmegaJackie/Relicable/issues/new?template=feature_request.yml).
+
+The bug template asks for the things that actually determine whether a report is
+actionable:
 
 - Relicable and Dalamud versions
 - Your job, and the stage and objective it was on
@@ -143,8 +137,6 @@ whether a report is actionable:
 
 Reports without a log are usually not actionable, because most failures are a specific step
 disagreeing with live game state and the log is the only record of what it saw.
-
-**Do not paste your access code into an issue.**
 
 ## Building and contributing
 

@@ -7,14 +7,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. Relicable is an **Early Alpha** and the single most
-        useful thing you can attach is the log.
-
-        > **Do NOT paste your Early Alpha access code anywhere in this issue** -
-        > not in the description, not in a screenshot, not in the log excerpt.
-        > Access codes are personal. Redact them before uploading anything.
-        > If you have already pasted one somewhere public, tell the developer
-        > directly so it can be rotated.
+        Thanks for reporting. The single most useful thing you can attach is
+        the debug log - most failures are one step disagreeing with live game
+        state, and the log is the only record of what it saw.
 
   - type: checkboxes
     id: prechecks
@@ -119,7 +114,7 @@ body:
       label: Log (/xllog)
       description: >-
         Attach the log file, or paste the relevant portion here. Drag-and-drop
-        the file into this box to upload it. Remember to redact your access code.
+        the file into this box to upload it.
       render: text
     validations:
       required: false
@@ -135,8 +130,7 @@ body:
       options:
         - label: >-
             I have attached (or pasted) my /xllog output, captured with
-            "Enable debug log" turned ON in /relic config, and I have redacted
-            my Early Alpha access code from it.
+            "Enable debug log" turned ON in /relic config.
           required: true
 
   - type: textarea

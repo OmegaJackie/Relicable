@@ -88,25 +88,7 @@ JSON files copied alongside. The SDK also writes a packaged plugin zip to
 `Dalamud.NET.Sdk/15.0.0` at the top of `Relicable.csproj` to the matching version and rebuild —
 otherwise some FFXIVClientStructs or Lumina members will not line up.
 
-## 4. Set up the Early Alpha signing key
-
-A build from a fresh clone has **no signing key compiled in**, so no access code will validate
-against it. If you are building for yourself, generate your own keypair once:
-
-```bash
-dotnet run --project tools/RelicableKeygen -- init
-dotnet run --project tools/RelicableKeygen -- mint --owner "Your Name" --days 365
-```
-
-`init` writes the private key to `keys/` (gitignored) and patches the matching public key into
-`Relicable/Licensing/AlphaCode.cs`. Rebuild, then paste the minted code into the plugin's access
-window. See [tools/RelicableKeygen/README.md](tools/RelicableKeygen/README.md) for the full
-scheme.
-
-Do not commit the patched public key back if you are contributing a pull request — it would
-invalidate the codes issued from the official key.
-
-## 5. Load it in-game as a dev plugin
+## 4. Load it in-game as a dev plugin
 
 1. In game, run `/xlsettings` and open the **Experimental** tab.
 2. Under **Dev Plugin Locations**, add the full path to the folder containing the built
@@ -116,7 +98,7 @@ invalidate the codes issued from the official key.
 
 After a rebuild, reload the dev plugin by toggling it off and on in the installer.
 
-## 6. Install the companion plugins
+## 5. Install the companion plugins
 
 The IPC integrations need these. `/relic config` → **Dependencies** shows live status and has
 copy-repo buttons. Paste a repo URL into `/xlsettings` → Experimental → *Custom Plugin
@@ -163,8 +145,3 @@ These are usually one-line fixes.
 **`error MSB4025: An XML comment cannot contain '--'`**
 Something added a double hyphen inside an XML comment in a `.csproj`. Use an en dash or reword.
 
-**The plugin loads but every command opens the access window**
-The build has no valid signing key compiled in, or your code does not match it. See step 4.
-
-**Access code rejected after a rebuild**
-You regenerated the keypair. Every previously minted code is now invalid — mint a new one.

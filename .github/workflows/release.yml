@@ -349,7 +349,7 @@ jobs:
       # Only for tag pushes. The asset name must stay "Relicable.zip" -
       # repo.json's download links point at /releases/latest/download/Relicable.zip.
       #
-      # prerelease MUST BE FALSE, even though this is an early alpha.
+      # prerelease MUST BE FALSE: Dalamud's installer ignores prereleases.
       # GitHub's /releases/latest/ endpoint resolves to the latest FULL release and
       # deliberately skips drafts and prereleases. Marking the release as a prerelease
       # therefore leaves /releases/latest/download/Relicable.zip returning 404 - the
@@ -376,11 +376,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            **Relicable ${{ github.ref_name }} - Early Alpha**
-
-            Relicable is invite-only while it is in early alpha: an access code
-            is required to run it. Requests go through the developer, not
-            through GitHub issues.
+            **Relicable ${{ github.ref_name }}**
 
             Install via the third-party repository manifest:
             `https://raw.githubusercontent.com/OmegaJackie/Relicable/main/repo.json`

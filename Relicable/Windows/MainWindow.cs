@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -26,7 +26,6 @@ public sealed class MainWindow : Window
     private readonly Configuration _config;
     private readonly NavmeshIpc _navmesh;
     private readonly ArtisanCraftingList _artisanLists;
-    private readonly Licensing.AlphaGate _alphaGate;
     private readonly Action _openNovus;
     private readonly Action _openBraves;
     private readonly Action _openQuestmap;
@@ -41,7 +40,7 @@ public sealed class MainWindow : Window
 
     public MainWindow(
         RelicController controller, Configuration config, NavmeshIpc navmesh,
-        ArtisanCraftingList artisanLists, Licensing.AlphaGate alphaGate,
+        ArtisanCraftingList artisanLists,
         Action openNovus, Action openBraves, Action openQuestmap, Action saveConfig, Action openConfig)
         : base("Relicable")
     {
@@ -49,7 +48,6 @@ public sealed class MainWindow : Window
         _config = config;
         _navmesh = navmesh;
         _artisanLists = artisanLists;
-        _alphaGate = alphaGate;
         _openNovus = openNovus;
         _openBraves = openBraves;
         _openQuestmap = openQuestmap;
@@ -286,36 +284,6 @@ public sealed class MainWindow : Window
             DrawAtmaTracker();
         }
 
-        DrawAlphaFooter();
-    }
-
-    // Early Alpha attribution footer.
-    //
-    // This is the anti-sharing mechanism, not decoration: the name the running code was
-    // issued to is displayed to whoever is using it. A code passed on to someone else
-    // keeps showing the name of the person it was issued to, on their screen, in every
-    // screenshot and stream. Do not make this hideable.
-    private void DrawAlphaFooter()
-    {
-        if (!_alphaGate.Unlocked)
-            return;
-
-        ImGui.Separator();
-
-        var license = _alphaGate.License;
-        ImGui.TextColored(Grey, $"Early Alpha — access: {license.Owner}");
-
-        var days = license.DaysRemaining(DateTime.UtcNow);
-        if (_alphaGate.ExpiringSoon)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(Yellow, $"({days} day{(days == 1 ? "" : "s")} left)");
-            Ui.Tooltip($"This access code expires on {license.Expires:yyyy-MM-dd}.\nAsk the developer for a renewal before then.");
-        }
-        else
-        {
-            Ui.Tooltip($"Issued to {license.Owner}. Expires {license.Expires:yyyy-MM-dd} ({days} days left).");
-        }
     }
 
     // True while the player is working the Atma stage (or has Manual pinned to Atma), so the
